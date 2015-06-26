@@ -1,0 +1,399 @@
+\chapter{Segmentação}
+
+Para selecionar um determinado tipo de tecido da imagem, é utilizado o recurso de 
+segmentação, disponível no InVesalius.
+
+\section{Limiar (\textit{Threshold})}
+
+Limiar é uma técnica de segmentação de imagens que permite selecionar da imagem somente
+os \textit{pixels} cuja intensidade está dentro de um limiar definido pelo usuário.
+O limiar é definido por dois números, limiares inicial e final, também conhecidos como
+\textit{thresholds} mínimo e máximo. Como referência para a definição, é utilizada a
+escala de Hounsfield (tabela \ref{tab:escala_hounsfield}).
+
+A segmentação é acionada no painel situado no lado esquerdo da interface do InVesalius,
+no item \textbf{2. Selecione a região de interesse} (figura \ref{fig:region_selection}).
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.4]{ScreenHunter01Jan201144.jpg}
+\caption{Seleção de região de interesse}
+\label{fig:region_selection}
+\end{figure}
+
+Antes de iniciar a segmentação, é necessário configurar uma máscara. A máscara é uma
+imagem com a região selecionada colorida e sobreposta à imagem original. Veja a figura
+(\ref{fig:region_selection_masc})
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.4]{limiar_principal}
+\caption{Máscara (regiões em amarelo)}
+\label{fig:region_selection_masc}
+\end{figure}
+
+Para alterar o limiar, pode-se utilizar a barra que representa os níveis de cinza na imagem (figura
+\ref{fig:region_selection_bar}). É possível alterar o limiar inicial usando o controle deslizante
+\textit{esquerdo} da barra. De forma semelhante, o limiar final pode ser alterado por meio do controle
+\textit{direito}. É possível, ainda, digitar diretamente os valores desejados nas respectivas caixas
+de texto nas extremidades da barra. Com a alteração dos valores, automaticamente a máscara será atualizada,
+pintando somente os \textit{pixels} com intensidade dentro da faixa determinada.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.7]{limiar_barra}
+\caption{Seleção dos \textit{pixels} com intensidade entre 226 e 3021 (Osso)}
+\label{fig:region_selection_bar}
+\end{figure}
+
+Também existem valores pré-definidos de limiar de acordo com alguns tipos de tecido, como mostra a
+figura \ref{fig:limiar_presets}. Basta selecionar o tecido desejado e a máscara será atualizada
+automaticamente.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.6]{limiar_presets}
+\caption{Caixa de seleção de valores pré-definidos de limiar}
+\label{fig:limiar_presets}
+\end{figure}
+
+A tabela \ref{tab:limiar} mostra a faixa de níveis de cinza de acordo com o tipo de tecido ou material.
+
+\begin{table}[h]
+\centering
+\caption{Limiares pré-definidos para alguns materiais}
+\begin{tabular}{lcc}\\
+\hline % este comando coloca uma linha na tabela
+Material & Limiar inicial & Limiar final\\
+\hline
+\hline
+Esmalte (Adulto) & 1553 & 2850\\
+Esmalte (Criança) & 2042 & 3021\\
+Osso & 226 & 3021\\
+Osso Compacto (Adulto) & 662 & 1988\\
+Osso Compacto (Criança) & 586 & 2198\\
+Osso Esponjoso (Adulto) & 148 & 661\\
+Osso Esponjoso (Criança) & 156 & 585\\
+Personalizado & Def. Usuário & Def. Usuário\\
+Tecido Epitelial (Adulto) & -718 & -177\\
+Tecido Epitelial (Criança) & -766 & -202\\
+Tecido Gorduroso (Adulto) & -205 & -51\\
+Tecido Gorduroso (Criança) & -212 & -72\\
+Tecido Muscular (Adulto) & -5 & 135\\
+Tecido Muscular (Criança) & -25 & 139\\
+Tecidos Moles & -700 & 225\\
+\hline
+\end{tabular}
+\label{tab:limiar}
+\end{table} 
+\newpage
+
+A tabela \ref{tab:limiar} é mais indicada para tomógrafos médicos. Nos tomógrafos odontológicos,
+comumente as faixas de níveis de cinza são maiores e não regulares. Assim, é necessário utilizar
+a barra de limiar (figura \ref{fig:region_selection_bar}) para ajustá-las.
+
+Caso se deseje criar uma nova máscara, basta clicar no ícone do atalho presente no painel, dentro
+do item \textbf{2. Selecione a região de interesse}. Veja a figura \ref{fig:shortcut_new_mask}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.2]{object_add_original}
+\caption{Atalho para criar nova máscara}
+\label{fig:shortcut_new_mask}
+\end{figure}
+
+Clicando-se nesse atalho, uma nova janela será apresentada (figura \ref{fig:create_new_mask}).
+Selecione a faixa de limiar desejada e clique em \textbf{OK}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{limiar_janela}
+\caption{Criar uma nova máscara}
+\label{fig:create_new_mask}
+\end{figure}
+
+\newpage
+
+Com uma máscara de segmentação configurada, é possível gerar a superfície 3D correspondente
+às imagens em estudo. A superfície será composta por uma malha de triângulos. O próximo capítulo
+trará maiores detalhes sobre esse tipo de superfície.
+
+Para iniciar a geração, clique no botão \textbf{Gerar superfície} (figura \ref{fig:generate_surface}).
+Caso já exista uma superfície gerada previamente, pode-se substituí-la pela nova. Para isso, basta
+selecionar, \textbf{antes} da geração, a opção \textbf{Sobrescrever anterior}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{generate_surface}
+\caption{Botão Gerar superfície}
+\label{fig:generate_surface}
+\end{figure}
+
+Após alguns instantes, a superfície será exibida na janela de visualização 3D do InVesalius
+(figura \ref{fig:surface}).
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{3d_model}
+\caption{Superfície 3D}
+\label{fig:surface}
+\end{figure}
+ 
+
+
+\section{Segmentação manual (Edição de imagens)}
+
+Há situações em que a segmentação por limiar não é eficiente, pois ela é aplicada ao conjunto
+todo das imagens. Para aplicar a segmentação a imagens isoladas, pode-se usar a segmentação
+manual. Com ela, é possível adicionar ou apagar uma determinada região da imagem que foi
+segmentada por limiar. No entanto, a segmentação manual requer maior conhecimento de anatomia
+por parte do usuário. Para utilizá-la, é necessário clicar em \textbf{Edição Manual} (figura \ref{fig:advanced_edition}) para abrir o painel de edição.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.6]{edicao_avancada.png}
+\caption{Ferramentas avançadas de edição}
+\label{fig:advanced_edition}
+\end{figure}
+
+O painel de edição aparece como mostra a figura \ref{fig:edition_slices_ref}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{edition_slices}
+\caption{Painel de edição}
+\label{fig:edition_slices_ref}
+\end{figure}
+
+Há dois tipos de pincel disponíveis para desenho: um em forma de círculo e outro em forma
+de quadrado. Para escolher um pincel, clique no triângulo da lista de seleção para abri-la
+e, a seguir, clique sobre o tipo escolhido. O pincel selecionado aparece no painel como
+mostra a figura \ref{fig:brush_type}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{edit_pencil}
+\caption{Tipo de pincel}
+\label{fig:brush_type}
+\end{figure}
+
+\newpage
+
+Também é possível alterar o diâmetro do pincel, conforme mostra a figura \ref{fig:select_diameter}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{diametro_pincel}
+\caption{Seleção do diâmetro do pincel}
+\label{fig:select_diameter}
+\end{figure}
+
+É necessário selecionar o tipo de operação que será realizada pelo pincel. As opções são as
+seguintes:\\
+\\
+\textbf{Desenhar}, para pintar uma região que não foi selecionada;\\
+\textbf{Apagar}, para remover uma região que foi selecionada;\\
+\textbf{Limiar}, para remover uma região que está fora do limiar e foi selecionada, ou pintar
+uma região que está dentro do limiar e não foi selecionada.\\
+
+A figura \ref{fig:select_brush_operations} ilustra a lista de operações do pincel:
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.6]{select_brush_operation}
+\caption{Seleção do tipo de operação do pincel}
+\label{fig:select_brush_operations}
+\end{figure}
+
+A figura \ref{fig:noise_amalgaman} mostra um caso em que algumas imagens contêm ruídos
+causados pela presença de prótese dentária de amálgama no paciente. Observe os "raios" 
+saindo da região da arcada dentária. Isso ocorre porque a máscara de segmentação também
+seleciona parte dos ruídos, pois eles estão na mesma intensidade do limiar para osso.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.3]{noise_amalgam}
+\caption{Imagem com ruído segmentada com limiar}
+\label{fig:noise_amalgaman}
+\end{figure}
+
+A figura \ref{fig:surface_amagaman} ilustra como é uma superfície gerada a partir dessa
+segmentação.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.3]{case_almagam}
+\caption{Superfície gerada a partir de imagem com ruído}
+\label{fig:surface_amagaman}
+\end{figure}
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.3]{case_almagam_zoom}
+\caption{Zoom da região com ruído}
+\label{fig:surface_amagaman_zoom}
+\end{figure}
+
+\newpage
+
+Em casos como este, utilizando o editor, com o pincel na opção \textbf{Apagar}, mantenha o
+botão \textbf{esquerdo} do mouse pressionado enquanto o \textbf{arrasta} sobre a região que
+deseja remover (na máscara).
+
+A figura \ref{fig:editor_amalgaman} mostra a imagem da figura \ref{fig:noise_amalgaman} após
+edição.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.3]{editor_amagam}
+\caption{Imagem com ruído removido}
+\label{fig:editor_amalgaman}
+\end{figure}
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.3]{edited_amalgam}
+\caption{Superfície criada a partir da imagem com ruído removido}
+\label{fig:surface_edited_amalgaman}
+\end{figure}
+
+\newpage
+Realizada a edição, basta gerar a superfície a partir da imagem editada (figura
+\ref{fig:surface_edited_amalgaman}). Como houve edição, ao clicar em \textbf{Criar superfície}, será
+requerido se deseja gerar a superfície a partir do método \textbf{binário} ou utilizando o método de suavização
+\textbf{Context aware smoothing} (figura \ref{fig:new_surface_edited}) para minimizar os "degraus" na superfície.
+Demais detalhes serão discutidos no capítulo \ref{cap_surface}.
+%\ref{fig:generate_surface}).
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{create_surface_edited.png}
+\caption{Método de criação de superfície}
+\label{fig:new_surface_edited}
+\end{figure}
+
+
+\section{Watershed}
+
+A segmentação por watershed, necessita que o usuário indique através de marcadores o que é objeto e o que é fundo. Esse método de segmentação interpreta a imagem como uma bacia hidrográfica, sendo que os valores dos níveis de cinza são as altitudes, formando vales e montanhas, os marcadores de fundo e objeto são as fontes de água. Essas fontes de água, começam "encher" essa bacia hidrográfica até se encontrarem, assim segmentando a imagem em fundo e objeto. Para utilizá-la, é necessário clicar na opção \textbf{Watershed} para abrir o painel de edição (figura~\ref{fig:watershed_painel}).
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.6]{watershed_panel.png}
+\caption{Painel de segmentação por Watershed}
+\label{fig:watershed_painel}
+\end{figure}
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.6]{watershed_panel.png}
+\caption{Painel de segmentação por Watershed}
+\label{fig:watershed_painel}
+\end{figure}
+
+Antes de iniciar a segmentação por Watershed, é recomendável limpar toda a máscara utilizando a ferramenta de limpeza de máscara, conforme é mostrado na seção~\ref{cap:limpeza_mascara}.
+
+Para inserir marcadores de fundo e objeto, é utilizada uma ferramenta em forma de pincel, a exemplo da segmentação manual, existe a opção de selecionar pincel retangular ou circular, também é possível alterar o tamanho deles. 
+
+É necessário também selecionar o tipo de operação que será realizada pelo pincel. As opções são as
+seguintes:\\
+\\
+\textbf{Objeto}, para inserir marcadores de objeto;\\
+\textbf{Fundo}, para inserir marcadores de fundo (não é objeto);\\
+\textbf{Apagar}, para apagar marcadores de objeto ou fundo.\\
+
+A opção "\textbf{Sobrescrever máscara}" é utilizada quando deseja-se que a máscara selecionada seja substituída pelo resultado da segmentação. Já a opção "\textbf{Considerar brilho e contraste}" é utilizada para o algoritmo levar em consideração a imagem que está sendo visualizada, assim é possível alterar o brilho e contraste e obter resultados melhores de segmentação.
+
+É possível configurar o método de \textit{Watershed} através do botão ao lado esquerdo do painel (figura~\ref{fig:watershed_conf}). Ao abrir essa opção é mostrada a janela~\ref{fig:watershed_janela_conf}. A opção método permite alterar o algoritmo que é utilizado na segmentação, existe o Wartershed convencional e o Watershed baseado no método de IFT (\textit{Image Forest Transform}), em alguns casos, como segmentação de cérebro ele apresenta melhor resultado.
+
+A conectividade dos pixels que serão levados em consideração, pode ser alterados, no caso 2D, é possível selecionar conectividade $4$ e $8$, já no caso 3D pode-se selecionar $6$,$18$ ou $26$. O valor "\textbf{Sigma da gaussiana}" é alterado para o método suavizar mais ou menos a imagem ao aplicar a segmentação, valores altos tendem a deixar a imagem mais suavizada e consequentemente o algoritmo seleciona menos detalhes e ruídos.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{configuration.png}
+\caption{Botão para abrir a configuração do método de Watershed}
+\label{fig:watershed_conf}
+\end{figure}
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{watershed_opcao.png}
+\caption{Opções de configuração do método de Watershed}
+\label{fig:watershed_janela_conf}
+\end{figure}
+
+Existe a opção do método ser executado para todo o volume (expandir para outras fatias), para isso, após ser inserido os marcadores de objeto e de fundo, é necessário clicar no botão \textbf{Expandir watershed para 3D}, localizado no painel. Na figura~\ref{fig:watershed_2d} é exibido o resultado da segmentação do cérebro em uma fatia (2D), já na figura~\ref{fig:watershed_3d} é mostrado a expansão para todo o volume (3D). 
+
+Ainda na figura~\ref{fig:watershed_2d}, podemos visualizar os marcadores de objeto em verde claro, os marcadores de fundo em vermelho e a máscara em verde transparente cobrindo a região selecionada (resultado).
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.2]{watershed_2d.png}
+\caption{Watershed aplicado em uma fatia de um volume.}
+\label{fig:watershed_2d}
+\end{figure}
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.2]{watershed_3d.png}
+\caption{Segmentação do cérebro com o método de Watershed aplicado em todo um volume (expandido em 3D).}
+\label{fig:watershed_3d}
+\end{figure}
+
+\section{Operações booleanas}
+
+Após efetuar segmentações, é possível realizar operações booleanas entre as máscaras. As operações booleanas suportadas são:\\
+\\
+\textbf{União}, realiza a união de duas máscaras;\\
+\textbf{Diferença}, realiza a diferença entre a primeira máscara com a segunda;\\
+\textbf{Intersecção}, para apagar marcadores de objeto ou fundo.\\
+\textbf{Disjunção exclusiva}, também é conhecida como XOR, mantém as regiões de ambas as máscara que possuem diferença.\\
+
+Para ativar essa ferramenta é necessário ir no menu \textbf{Ferramentas}, \textbf{Operações boolenas}, como é exibido na figura~\ref{fig:booleano_menu} 
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{booleano_menu.png}
+\caption{Menu para ativar a ferramenta de operações booleanas.}
+\label{fig:booleano_menu}
+\end{figure}
+
+É necessário selecionar a primeira máscara, a operação a ser realizada e a segunda máscara conforme mostra a figura~\ref{fig:booleano_janela}. Em seguida é necessário clicar no botão \textbf{Ok}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.5]{boolano_janela.png}
+\caption{Ferramenta de operações booleanas.}
+\label{fig:booleano_janela}
+\end{figure}
+
+Na figura~\ref{fig:op_boolana}, apresentamos um exemplo de utilização da ferramenta.
+
+\begin{figure}[!htb]
+  \centering
+  \subfloat[Máscara A]{\includegraphics[width=0.332\textwidth]{booleano_m_a}}                
+  \hfill
+  \subfloat[Máscara B]{\includegraphics[width=0.332\textwidth]{booleano_m_b}}	
+  \hfill  
+  \subfloat[União (A $\cup$ B)]{\includegraphics[width=0.332\textwidth]{booleano_uniao}}
+  \hfill  
+  \subfloat[Diferença (A - B)]{\includegraphics[width=0.332\textwidth]{booleano_dif}}
+  \hfill  
+  \subfloat[Intersecção (A $\cap$ B)]{\includegraphics[width=0.332\textwidth]{booleano_interc}}
+  \hfill  
+  \subfloat[Disjunção exclusiva (A $\oplus$ B)]{\includegraphics[width=0.332\textwidth]{booleano_disj_exc}}
+  \caption{Exemplo de operações booleanas.}
+  \label{fig:op_boolana}
+\end{figure}
+
+\section{Limpeza total da máscara}
+\label{cap:limpeza_mascara}
+
+Pode-se efetuar a limpeza total da máscara (figura~\ref{fig:limpeza_mascara}), isso é recomendado antes de iniciar a inserção de marcadores de Watershed. A ferramenta está localizada no menu, \textbf{Ferramentas}, \textbf{Máscara}, \textbf{Limpar máscara}, também é possível executa-la pressionando as teclas \textbf{CTRL+SHIFT+A}.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[scale=0.6]{watershed_limpeza.png}
+\caption{Limpeza de máscara}
+\label{fig:limpeza_mascara}
+\end{figure}

@@ -17,8 +17,11 @@
 #    detalhes.
 #--------------------------------------------------------------------------
 
+import sys
+
 import vtk
-import wx.lib.pubsub as ps
+import wx
+from wx.lib.pubsub import pub as Publisher
 
 import vtk_utils as vu
 
@@ -103,7 +106,8 @@ def Merge(polydata_list):
 
 def Export(polydata, filename, bin=False):
     writer = vtk.vtkXMLPolyDataWriter()
-    writer.SetFileName(filename)
+    print filename, type(filename)
+    writer.SetFileName(filename.encode('utf-8'))
     if bin:
         writer.SetDataModeToBinary()
     else:
@@ -113,7 +117,10 @@ def Export(polydata, filename, bin=False):
 
 def Import(filename):
     reader = vtk.vtkXMLPolyDataReader()
-    reader.SetFileName(filename)
+    if isinstance(filename, unicode):
+        reader.SetFileName(filename.encode(wx.GetDefaultPyEncoding()))
+    else:
+        reader.SetFileName(filename)
     reader.Update()
     return reader.GetOutput()
 
@@ -129,7 +136,7 @@ def JoinSeedsParts(polydata, point_id_list):
     pos = 1
     for seed in point_id_list:
         conn.AddSeed(seed)
-        UpdateProgress(pos, _("Getting selected parts"))
+        UpdateProgress(pos, _("Analysing selected regions..."))
         pos += 1
 
     conn.AddObserver("ProgressEvent", lambda obj, evt:
@@ -188,6 +195,6 @@ def SplitDisconectedParts(polydata):
 
         polydata_collection.append(p)
         if progress:
-            UpdateProgress(region, _("Splitting disconected parts"))
+            UpdateProgress(region, _("Splitting disconnected regions..."))
 
     return polydata_collection

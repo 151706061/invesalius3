@@ -19,7 +19,7 @@
 
 import wx
 import wx.lib.foldpanelbar as fpb
-import wx.lib.pubsub as ps
+from wx.lib.pubsub import pub as Publisher
 
 import constants as const
 import data_notebook as nb
@@ -30,6 +30,8 @@ import task_importer as importer
 import task_surface as surface
 import task_tools as tools
 import task_navigator as navigator
+
+FPB_DEFAULT_STYLE = 2621440
 
 def GetCollapsedIconData():
     return \
@@ -50,7 +52,7 @@ zzW\xcff&\xb8,\x89\xa8@Q\xd6\xaaf\xdfRm,\xee\xb1BDxr#\xae\xf5|\xddo\xd6\xe2H\
 \xb7w\xf3\x1d$\x7f\xc1\xe0\xbd\xa7\xeb\xa0(,"Kc\x12\xc1+\xfd\xe8\tI\xee\xed)\
 \xbf\xbcN\xc1{D\x04k\x05#\x12\xfd\xf2a\xde[\x81\x87\xbb\xdf\x9cr\x1a\x87\xd3\
 0)\xba>\x83\xd5\xb97o\xe0\xaf\x04\xff\x13?\x00\xd2\xfb\xa9`z\xac\x80w\x00\
-\x00\x00\x00IEND\xaeB`\x82' 
+\x00\x00\x00IEND\xaeB`\x82'
 
 def GetCollapsedIconBitmap():
     return wx.BitmapFromImage(GetCollapsedIconImage())
@@ -81,7 +83,7 @@ def GetExpandedIconData():
 \xd8|\xb9\x0f\xd3\x9a\x8a\xc7\x08\x00\x9f?\xdd%\xde\x07\xda\x93\xc3{\x19C\
 \x8a\x9c\x03\x0b8\x17\xe8\x9d\xbf\x02.>\x13\xc0n\xff{PJ\xc5\xfdP\x11""<\xbc\
 \xff\x87\xdf\xf8\xbf\xf5\x17FF\xaf\x8f\x8b\xd3\xe6K\x00\x00\x00\x00IEND\xaeB\
-`\x82' 
+`\x82'
 
 def GetExpandedIconBitmap():
     return wx.BitmapFromImage(GetExpandedIconImage())
@@ -97,33 +99,48 @@ class Panel(wx.Panel):
     def __init__(self, parent):
         wx.Panel.__init__(self, parent, pos=wx.Point(5, 5),
                           size=wx.Size(280, 656))
-        
-        sizer = wx.BoxSizer(wx.VERTICAL)        
+
+        #sizer = wx.BoxSizer(wx.VERTICAL)
+        gbs = wx.GridBagSizer(5,5)
         #sizer.Add(UpperTaskPanel(self), 5, wx.EXPAND|wx.GROW)
-        sizer.Add(UpperTaskPanel(self), 16, wx.EXPAND|wx.GROW)
+        gbs.Add(UpperTaskPanel(self), (0, 0), flag=wx.EXPAND)
 
         #sizer.Add(LowerTaskPanel(self), 3, wx.EXPAND|wx.GROW)
-        sizer.Add(LowerTaskPanel(self), 6, wx.EXPAND|wx.GROW)
+        gbs.Add(LowerTaskPanel(self), (1, 0), flag=wx.EXPAND | wx.ALIGN_BOTTOM)
 
-        
+        gbs.AddGrowableCol(0)
+
+        gbs.AddGrowableRow(0, 1)
+        gbs.AddGrowableRow(1, 0)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(gbs, 1, wx.EXPAND)
+
+        self.gbs = gbs
+
+        #self.SetSizerAndFit(sizer)
         self.SetSizer(sizer)
+
 
 # Lower fold panel
 class LowerTaskPanel(wx.Panel):
     def __init__(self, parent):
-        wx.Panel.__init__(self, parent, pos=wx.Point(5, 5),
-        #                  size=wx.Size(280, 700))
-                           size=wx.Size(280, 420))
-        
-        fold_panel = fpb.FoldPanelBar(self, -1, wx.DefaultPosition,
-                                      self.GetSize(),fpb.FPB_DEFAULT_STYLE,
-                                      fpb.FPB_COLLAPSE_TO_BOTTOM) 
+        wx.Panel.__init__(self, parent, size=(150, -1))
+        fold_panel = fpb.FoldPanelBar(self, -1,
+                                      style=FPB_DEFAULT_STYLE,
+                                      agwStyle=fpb.FPB_COLLAPSE_TO_BOTTOM)
+
+        self.fold_panel = fold_panel
 
         self.enable_items = []
         self.overwrite = False
 
+        gbs = wx.GridBagSizer(5,5)
+        gbs.AddGrowableCol(0, 1)
+        self.gbs = gbs
+
         sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(fold_panel, 1, wx.GROW|wx.EXPAND)        
+        sizer.Add(gbs, 1, wx.GROW|wx.EXPAND)
         self.SetSizer(sizer)
 
         image_list = wx.ImageList(16,16)
@@ -137,29 +154,52 @@ class LowerTaskPanel(wx.Panel):
         col = style.GetFirstColour()
         self.enable_items.append(item)
 
-        fold_panel.AddFoldPanelWindow(item, nb.NotebookPanel(item), Spacing= 0,
-                                      leftSpacing=0, rightSpacing=0)
-        fold_panel.Expand(fold_panel.GetFoldPanel(0))
+        #npanel = wx.Panel(self, -1)
+        self.npanel = nb.NotebookPanel(item)
 
-        # Fold 2 - Tools
-        # Measures
-        # Text Annotations
-        #item = fold_panel.AddFoldPanel(_("Tools"), collapsed=False,
-        #                               foldIcons=image_list)
-        #style = fold_panel.GetCaptionStyle(item)
-        #col = style.GetFirstColour()
-        #self.enable_items.append(item)
-        # 
-        #fold_panel.AddFoldPanelWindow(item, tools.TaskPanel(item), Spacing= 0,
-        #                              leftSpacing=0, rightSpacing=0)
-        #fold_panel.Expand(fold_panel.GetFoldPanel(1))
+        self.__calc_best_size(self.npanel)
+
+        fold_panel.AddFoldPanelWindow(item, self.npanel, #fpb.FPB_ALIGN_WIDTH, #Spacing= 0,
+                                      leftSpacing=0, rightSpacing=0)
+
+        gbs.AddGrowableRow(0, 1)
+        gbs.Add(fold_panel, (0, 0), flag=wx.EXPAND)
+        gbs.Layout()
+        item.ResizePanel()
+
+        sizer.Fit(self)
+        self.Fit()
 
         self.SetStateProjectClose()
         self.__bind_events()
 
 
+    def __calc_best_size(self, panel):
+        parent = panel.GetParent()
+        panel.Reparent(self)
+
+        gbs = self.gbs
+        fold_panel = self.fold_panel
+
+        # Calculating the size
+        gbs.AddGrowableRow(1, 1)
+        #gbs.AddGrowableRow(0, 1)
+        gbs.Add(fold_panel, (0, 0), flag=wx.EXPAND)
+        gbs.Add(panel, (1, 0), flag=wx.EXPAND)
+        gbs.Layout()
+        self.Fit()
+        size = panel.GetSize()
+
+        gbs.Remove(1)
+        gbs.Remove(0)
+        gbs.RemoveGrowableRow(1)
+
+        panel.Reparent(parent)
+        panel.SetInitialSize(size)
+        self.SetInitialSize(self.GetSize())
+
     def __bind_events(self):
-        ps.Publisher().subscribe(self.OnEnableState, "Enable state project")
+        Publisher.subscribe(self.OnEnableState, "Enable state project")
 
     def OnEnableState(self, pubsub_evt):
         state = pubsub_evt.data
@@ -176,23 +216,19 @@ class LowerTaskPanel(wx.Panel):
         for item in self.enable_items:
             item.Enable()
 
+    def ResizeFPB(self):
+        sizeNeeded = self.fold_panel.GetPanelsLength(0, 0)[2]
+        self.fold_panel.SetMinSize((self.fold_panel.GetSize()[0], sizeNeeded ))
+        self.fold_panel.SetSize((self.fold_panel.GetSize()[0], sizeNeeded))
+
 
 # Upper fold panel
 class UpperTaskPanel(wx.Panel):
     def __init__(self, parent):
-        wx.Panel.__init__(self, parent, pos=wx.Point(5, 5),
-                          size=wx.Size(280, 656))
-
+        wx.Panel.__init__(self, parent)
         fold_panel = fpb.FoldPanelBar(self, -1, wx.DefaultPosition,
-                                      self.GetSize(),fpb.FPB_DEFAULT_STYLE,
-                                      fpb.FPB_SINGLE_FOLD) 
-        print self.GetBackgroundColour()                              
-        #self.SetBackgroundColour((0,255,0))
-
-
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(fold_panel, 1, wx.GROW|wx.EXPAND)
-        self.SetSizer(sizer)
+                                      wx.DefaultSize,FPB_DEFAULT_STYLE,
+                                      fpb.FPB_SINGLE_FOLD)
 
         image_list = wx.ImageList(16,16)
         image_list.Add(GetExpandedIconBitmap())
@@ -205,12 +241,13 @@ class UpperTaskPanel(wx.Panel):
         session = ses.Session()
         print "session mode: ", session.mode
         if int(session.mode) == const.MODE_RP:
-            tasks = [(_("InVesalius start"), importer.TaskPanel),
+            tasks = [(_("Load data"), importer.TaskPanel),
                      (_("Select region of interest"), slice_.TaskPanel),
                      (_("Configure 3D surface"), surface.TaskPanel),
-                     (_("Export data"), exporter.TaskPanel)]
+                     (_("Export data"), exporter.TaskPanel)
+                    ]
         elif int(session.mode) == const.MODE_NAVIGATOR:
-            tasks = [(_("InVesalius start"), importer.TaskPanel),
+            tasks = [(_("Load data"), importer.TaskPanel),
                      (_("Select region of interest"), slice_.TaskPanel),
                      (_("Configure 3D surface"), surface.TaskPanel),
                      (_("Utilize navigation system"), navigator.TaskPanel)]
@@ -223,11 +260,11 @@ class UpperTaskPanel(wx.Panel):
                                             foldIcons=image_list)
             style = fold_panel.GetCaptionStyle(item)
             col = style.GetFirstColour()
-            
+
             # Add panel to FoldPanel
             fold_panel.AddFoldPanelWindow(item,
                                           panel(item),
-                                          Spacing= 0,
+                                          #Spacing= 0,
                                           leftSpacing=0,
                                           rightSpacing=0)
 
@@ -241,23 +278,28 @@ class UpperTaskPanel(wx.Panel):
             # slice editor.
             if name == _("Select region of interest"):
                 self.__id_slice = item.GetId()
-
+            elif name == _("Configure 3D surface"):
+                self.__id_surface = item.GetId()
 
         fold_panel.Expand(fold_panel.GetFoldPanel(0))
         self.fold_panel = fold_panel
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(fold_panel, 1, wx.GROW|wx.EXPAND)
+        self.SetSizerAndFit(sizer)
 
         self.SetStateProjectClose()
         self.__bind_events()
 
     def __bind_events(self):
         self.fold_panel.Bind(fpb.EVT_CAPTIONBAR, self.OnFoldPressCaption)
-        ps.Publisher().subscribe(self.OnEnableState, "Enable state project")
-        ps.Publisher().subscribe(self.OnOverwrite, 'Create surface from index')
-        ps.Publisher().subscribe(self.OnFoldSurface, 'Fold surface task')
-        ps.Publisher().subscribe(self.OnFoldExport, 'Fold export task')
+        Publisher.subscribe(self.OnEnableState, "Enable state project")
+        Publisher.subscribe(self.OnOverwrite, 'Create surface from index')
+        Publisher.subscribe(self.OnFoldSurface, 'Fold surface task')
+        Publisher.subscribe(self.OnFoldExport, 'Fold export task')
 
     def OnOverwrite(self, pubsub_evt):
-        self.overwrite = pubsub_evt.data[1]
+        self.overwrite = pubsub_evt.data['options']['overwrite']
 
     def OnFoldSurface(self, pubsub_evt):
         if not self.overwrite:
@@ -286,11 +328,20 @@ class UpperTaskPanel(wx.Panel):
     def OnFoldPressCaption(self, evt):
         id = evt.GetTag().GetId()
         closed = evt.GetFoldStatus()
-         
-        if self.__id_slice == id:
-            ps.Publisher().sendMessage('Retrieve task slice style')
-        else:
-            ps.Publisher().sendMessage('Disable task slice style')
 
-        
+        if id == self.__id_slice:
+            Publisher.sendMessage('Retrieve task slice style')
+            Publisher.sendMessage('Fold mask page')
+        elif id == self.__id_surface:
+            Publisher.sendMessage('Fold surface page')
+        else:
+            Publisher.sendMessage('Disable task slice style')
+
+
         evt.Skip()
+        wx.CallAfter(self.ResizeFPB)
+
+    def ResizeFPB(self):
+        sizeNeeded = self.fold_panel.GetPanelsLength(0, 0)[2]
+        self.fold_panel.SetMinSize((self.fold_panel.GetSize()[0], sizeNeeded ))
+        self.fold_panel.SetSize((self.fold_panel.GetSize()[0], sizeNeeded))

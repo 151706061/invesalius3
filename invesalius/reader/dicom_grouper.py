@@ -80,6 +80,7 @@ class DicomGroup:
     def AddSlice(self, dicom):
         if not self.dicom:
             self.dicom = dicom
+
         pos = tuple(dicom.image.position) 
         
         #Case to test: \other\higroma
@@ -95,7 +96,7 @@ class DicomGroup:
                 return False
         else:
             self.slices_dict[dicom.image.number] = dicom
-            self.nslices += 1
+            self.nslices	 += 1
             return True
 
     def GetList(self):
@@ -151,7 +152,9 @@ class DicomGroup:
             self.zspacing = 1
 
     def GetDicomSample(self):
-        return self.dicom
+        size = len(self.slices_dict)
+        dicom = self.GetHandSortedList()[size/2]
+        return dicom
             
 class PatientGroup:
     def __init__(self):

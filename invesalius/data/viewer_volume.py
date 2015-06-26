@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 #--------------------------------------------------------------------------
 # Software:     InVesalius - Software de Reconstrucao 3D de Imagens Medicas
 # Copyright:    (C) 2001  Centro de Pesquisas Renato Archer
@@ -23,7 +26,7 @@ import numpy
 import wx
 import vtk
 from vtk.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteractor
-import wx.lib.pubsub as ps
+from wx.lib.pubsub import pub as Publisher
 
 import constants as const
 import data.bases as bases
@@ -32,13 +35,17 @@ import project as prj
 import style as st
 import utils
 
+from data import measures
+
+PROP_MEASURE = 0.8
+
 class Viewer(wx.Panel):
     def __init__(self, parent):
         wx.Panel.__init__(self, parent, size=wx.Size(320, 320))
         self.SetBackgroundColour(wx.Colour(0, 0, 0))
 
         self.interaction_style = st.StyleStateManager()
-        
+
         self.ball_reference = None
         self.initial_foco = None
 
@@ -93,73 +100,429 @@ class Viewer(wx.Panel):
         self.seed_points = []
 
         self.points_reference = []
-        
 
+        self.measure_picker = vtk.vtkPropPicker()
+        #self.measure_picker.SetTolerance(0.005)
+        self.measures = []
+
+        self._last_state = 0
+
+        self.repositioned_axial_plan = 0
+        self.repositioned_sagital_plan = 0
+        self.repositioned_coronal_plan = 0
+        self.added_actor = 0
+
+        self._mode_cross = False
+        self._to_show_ball = 0
+        self._ball_ref_visibility = False
+
+		# initialization of navigation variables
+		#======aji=================================================================
+        self.ShowAngles()
+        #=======================================================================
+
+        ##---------------------------------------------
+        ##AXES TO GUIDE VISUALIZATION - CREATED BY VH       
+#         axes = vtk.vtkAxesActor()
+#         axes.SetXAxisLabelText('x')
+#         axes.SetYAxisLabelText('y')
+#         axes.SetZAxisLabelText('z')
+#         axes.SetTotalLength(50, 50, 50)
+#         self.ren.AddActor(axes)
+        ##---------------------------------------------
+		# ---
     def __bind_events(self):
-        ps.Publisher().subscribe(self.LoadActor,
+        Publisher.subscribe(self.LoadActor,
                                  'Load surface actor into viewer')
-        ps.Publisher().subscribe(self.RemoveActor,
+        Publisher.subscribe(self.RemoveActor,
                                 'Remove surface actor from viewer')
-        ps.Publisher().subscribe(self.UpdateRender,
+        Publisher.subscribe(self.OnShowSurface, 'Show surface')
+        Publisher.subscribe(self.UpdateRender,
                                  'Render volume viewer')
-        ps.Publisher().subscribe(self.ChangeBackgroundColour,
+        Publisher.subscribe(self.ChangeBackgroundColour,
                         'Change volume viewer background colour')
         # Raycating - related
-        ps.Publisher().subscribe(self.LoadVolume,
+        Publisher.subscribe(self.LoadVolume,
                                  'Load volume into viewer')
-        ps.Publisher().subscribe(self.OnSetWindowLevelText,
+        Publisher.subscribe(self.UnloadVolume,
+                                 'Unload volume')
+        Publisher.subscribe(self.OnSetWindowLevelText,
                             'Set volume window and level text')
-        ps.Publisher().subscribe(self.OnHideRaycasting,
+        Publisher.subscribe(self.OnHideRaycasting,
                                 'Hide raycasting volume')
-        ps.Publisher().subscribe(self.OnShowRaycasting,
+        Publisher.subscribe(self.OnShowRaycasting,
                                 'Update raycasting preset')
         ###
-        ps.Publisher().subscribe(self.AppendActor,'AppendActor')
-        ps.Publisher().subscribe(self.SetWidgetInteractor, 
+        Publisher.subscribe(self.AppendActor,'AppendActor')
+        Publisher.subscribe(self.SetWidgetInteractor, 
                                 'Set Widget Interactor')
-        ps.Publisher().subscribe(self.OnSetViewAngle,
+        Publisher.subscribe(self.OnSetViewAngle,
                                 'Set volume view angle')
 
-        ps.Publisher().subscribe(self.OnDisableBrightContrast,
-                                 ('Set interaction mode',
-                                  const.MODE_SLICE_EDITOR))
+        Publisher.subscribe(self.OnDisableBrightContrast,
+                                 'Set interaction mode '+
+                                  str(const.MODE_SLICE_EDITOR))
 
-        ps.Publisher().subscribe(self.OnExportSurface, 'Export surface to file')
+        Publisher.subscribe(self.OnExportSurface, 'Export surface to file')
 
-        ps.Publisher().subscribe(self.LoadSlicePlane, 'Load slice plane')
+        Publisher.subscribe(self.LoadSlicePlane, 'Load slice plane')
 
-        ps.Publisher().subscribe(self.ResetCamClippingRange, 'Reset cam clipping range')
-        ps.Publisher().subscribe(self.SetVolumeCamera, 'Set camera in volume')
+        Publisher.subscribe(self.ResetCamClippingRange, 'Reset cam clipping range')
+        Publisher.subscribe(self.SetVolumeCamera, 'Set camera in volume')
 
-        ps.Publisher().subscribe(self.OnEnableStyle, 'Enable style')
-        ps.Publisher().subscribe(self.OnDisableStyle, 'Disable style')
+        Publisher.subscribe(self.OnEnableStyle, 'Enable style')
+        Publisher.subscribe(self.OnDisableStyle, 'Disable style')
 
-        ps.Publisher().subscribe(self.OnHideText,
+        Publisher.subscribe(self.OnHideText,
                                  'Hide text actors on viewers')
 
-        ps.Publisher().subscribe(self.OnShowText,
+        Publisher.subscribe(self.AddActors, 'Add actors ' + str(const.SURFACE))
+        Publisher.subscribe(self.RemoveActors, 'Remove actors ' + str(const.SURFACE))
+
+        Publisher.subscribe(self.OnShowText,
                                  'Show text actors on viewers')
-        ps.Publisher().subscribe(self.OnCloseProject, 'Close project data')
+        Publisher.subscribe(self.OnCloseProject, 'Close project data')
 
-        ps.Publisher().subscribe(self.RemoveAllActor, 'Remove all volume actors')
+        Publisher.subscribe(self.RemoveAllActor, 'Remove all volume actors')
         
-        ps.Publisher().subscribe(self.OnExportPicture,'Export picture to file')
+        Publisher.subscribe(self.OnExportPicture,'Export picture to file')
 
-        ps.Publisher().subscribe(self.OnStartSeed,'Create surface by seeding - start')
-        ps.Publisher().subscribe(self.OnEndSeed,'Create surface by seeding - end')
-        
-        ps.Publisher().subscribe(self.ActivateBallReference,
+        Publisher.subscribe(self.OnStartSeed,'Create surface by seeding - start')
+        Publisher.subscribe(self.OnEndSeed,'Create surface by seeding - end')
+
+        Publisher.subscribe(self.ActivateBallReference,
                 'Activate ball reference')
-        ps.Publisher().subscribe(self.DeactivateBallReference,
+        Publisher.subscribe(self.DeactivateBallReference,
                 'Deactivate ball reference')
-        ps.Publisher().subscribe(self.SetBallReferencePosition,
+		# see if these subscribes are here just for navigation and if
+		# they are being used
+        Publisher.subscribe(self.SetBallReferencePosition,
                 'Set ball reference position')
-        ps.Publisher().subscribe(self.SetBallReferencePositionBasedOnBound,
+        Publisher.subscribe(self.SetBallReferencePositionBasedOnBound,
                 'Set ball reference position based on bound')
+        Publisher.subscribe(self.SetStereoMode, 'Set stereo mode')
+    
+        Publisher.subscribe(self.Reposition3DPlane, 'Reposition 3D Plane')
+        
+        Publisher.subscribe(self.RemoveVolume, 'Remove Volume')
+
+        Publisher.subscribe(self._check_ball_reference, 'Enable style')
+        Publisher.subscribe(self._uncheck_ball_reference, 'Disable style')
+
+        # subscribes for navigation functions
+
+        Publisher.subscribe(self.CreateSphereMarkers, 'Create ball')
+        Publisher.subscribe(self.HideSphereMarkers, 'Hide balls')
+        Publisher.subscribe(self.ShowSphereMarkers, 'Show balls')
+        Publisher.subscribe(self.ChangeInitCoilAngle, 'Change Init Coil Angle')
+        # =========aji=========================================================
+        Publisher.subscribe(self.RemoveMarkers, 'Remove Markers')
+        Publisher.subscribe(self.CoilAngleTracking, 'Track Coil Angle')
+        Publisher.subscribe(self.HideShowObject, 'Hide Show Object')
+        Publisher.subscribe(self.ShowObject, 'Show Object status')
+        Publisher.subscribe(self.UpAngles, 'Update Angles')
+        Publisher.subscribe(self.HideAnglesActor, 'Hide Angles')        
+        # =====================================================================
+
+    def SetStereoMode(self, pubsub_evt):
+        mode = pubsub_evt.data
+        ren_win = self.interactor.GetRenderWindow()
+        
+        if mode == const.STEREO_OFF:
+            ren_win.StereoRenderOff()
+        else:
+
+            if mode == const.STEREO_RED_BLUE:
+                ren_win.SetStereoTypeToRedBlue()
+            elif mode == const.STEREO_CRISTAL:
+                ren_win.SetStereoTypeToCrystalEyes()
+            elif mode == const.STEREO_INTERLACED:
+                ren_win.SetStereoTypeToInterlaced()
+            elif mode == const.STEREO_LEFT:
+                ren_win.SetStereoTypeToLeft()
+            elif mode == const.STEREO_RIGHT:
+                ren_win.SetStereoTypeToRight()
+            elif mode == const.STEREO_DRESDEN:
+                ren_win.SetStereoTypeToDresden()
+            elif mode == const.STEREO_CHECKBOARD:
+                ren_win.SetStereoTypeToCheckerboard()
+            elif mode == const.STEREO_ANAGLYPH:
+                ren_win.SetStereoTypeToAnaglyph()
+
+            ren_win.StereoRenderOn()
+        
+        self.interactor.Render()
+
+    # --- functions for navigation
+    def CreateSphereMarkers(self, pubsub_evt):
+        ball_id = pubsub_evt.data[0]
+        ballsize = pubsub_evt.data[1]
+        ballcolour = pubsub_evt.data[2]
+        coord = pubsub_evt.data[3]
+        x, y, z = bases.flip_x(coord)
+        
+        ball_ref = vtk.vtkSphereSource()
+        ball_ref.SetRadius(ballsize)
+        ball_ref.SetCenter(x, y, z)
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInput(ball_ref.GetOutput())
+
+        prop = vtk.vtkProperty()
+        prop.SetColor(ballcolour)
+        
+        #adding a new actor for the present ball
+        self.staticballs.append(vtk.vtkActor())
+        
+        self.staticballs[ball_id].SetMapper(mapper)
+        self.staticballs[ball_id].SetProperty(prop)
+        
+        self.ren.AddActor(self.staticballs[ball_id]) 
+        ball_id = ball_id + 1
+        self.UpdateRender()
+    
+    def HideSphereMarkers(self, pubsub_evt):
+        ballid = pubsub_evt.data
+        for i in range(0, ballid + 1):
+            self.staticballs[i].SetVisibility(0)
+        self.UpdateRender()
+    
+    def ShowSphereMarkers(self, pubsub_evt):
+        ballid = pubsub_evt.data
+        for i in range(0, ballid + 1):
+            self.staticballs[i].SetVisibility(1)
+        self.UpdateRender()
+  
+    def CreateCoilReference(self):
+        #SILVER COIL
+        self.coil_reference = vtk.vtkOBJReader()
+
+        #self.coil_reference.SetFileName(os.path.realpath(os.path.join('..',
+        #                                                         'models',
+        #                                                         'coil_cti_2_scale10.obj')))
+        
+        self.coil_reference.SetFileName('C:\Users\Biomag\Desktop\invesalius_navigator\icons\coil_cti_2_scale10.obj')
+        
+        ##self.coil_reference.Update()
+        coilMapper = vtk.vtkPolyDataMapper()
+        coilMapper.SetInputConnection(self.coil_reference.GetOutputPort())
+
+        self.coilActor = vtk.vtkActor()
+        self.coilActor.SetMapper(coilMapper)
+        
+        ##Creating axes to follow the coil
+        #axisXArrow = vtk.vtkArrowSource()
+        #axisYArrow = vtk.vtkArrowSource()
+        #axisZArrow = vtk.vtkArrowSource()
+        
+        #axisXMapper = vtk.vtkPolyDataMapper()
+        #axisXMapper.SetInput(axisXArrow.GetOutput())
+        #axisXMapper.ScalarVisibilityOff()
+        #axisYMapper = vtk.vtkPolyDataMapper()
+        #axisYMapper.SetInput(axisYArrow.GetOutput())
+        #axisYMapper.ScalarVisibilityOff()
+        #axisZMapper = vtk.vtkPolyDataMapper()
+        #axisZMapper.SetInput(axisZArrow.GetOutput())
+        #axisZMapper.ScalarVisibilityOff()
+
+        #axisXArrowActor = vtk.vtkActor()
+        #axisXArrowActor.SetMapper(axisXMapper)
+        #axisXArrowActor.SetScale(40)
+        #axisXArrowActor.GetProperty().SetColor(1, 0, 0) # x-axis >> red
+        #axisYArrowActor = vtk.vtkActor()
+        #axisYArrowActor.SetScale(40)
+        #axisYArrowActor.RotateZ(90)
+        #axisYArrowActor.GetProperty().SetColor(0, 1, 0) # y-axis >> green
+        #axisYArrowActor.SetMapper(axisYMapper)
+        #axisZArrowActor = vtk.vtkActor()
+        #axisZArrowActor.RotateY(-90)
+        #axisZArrowActor.SetScale(40)
+        #axisZArrowActor.GetProperty().SetColor(0, 0, 1) # z-axis >> blue
+        #axisZArrowActor.SetMapper(axisZMapper)
+
+        #self.axisAssembly.AddPart(axisXArrowActor)
+        #self.axisAssembly.AddPart(axisYArrowActor)
+        #self.axisAssembly.AddPart(axisZArrowActor)
+        #self.axisAssembly.PickableOff()
+    
+    def ChangeInitCoilAngle(self, pubsub_evt):
+        self.CreateCoilReference()
+        self.ren.AddActor(self.coilActor)
+        self.coilActor.SetOrientation(0, 0, 0)
+        inits_data = pubsub_evt.data
+        print "inits data", inits_data
+        init_orient = inits_data[0]
+        self.init_plh_angles = inits_data[1]
+        self.vectors = ((inits_data[2][0, 0], inits_data[2][0, 1], inits_data[2][0, 2]),
+                        (inits_data[2][1, 0], inits_data[2][1, 1], inits_data[2][1, 2]),
+                        (inits_data[2][2, 0], inits_data[2][2, 1], inits_data[2][2, 2]))
+        self.coilActor.SetOrientation(init_orient)
+        self.axisAssembly.SetOrientation(init_orient)
+        
+        self.UpdateRender()
+
+    def SetBallReferencePosition(self, coord, angles):
+        coord = coord
+        angles = angles
+        #Coronal Images dont require this transformation - 1 tested
+        #and for this case, at navigation, the z axis is inverted
+        
+        #E se ao inves de fazer o flipx, da pra soh multiplicar o y por -1
+        
+        x, y, z = bases.flip_x(coord)
+        
+        #center = self.coilActor.GetCenter()
+        
+        ##azimutal - psi - rotz
+        ##elevation - teta - rotx
+        ##roll - phi - roty
+        
+##        print "center: ", center
+        #print "orig: ", orig
+        #print "bounds: ", bounds
+##        print "coord: ", coord       
+        
+        transf = vtk.vtkTransform()
+        
+        if angles and self.init_plh_angles:
+            #plh angles variation
+            delta_angles = (angles[0] - self.init_plh_angles[0],
+                           angles[1] - self.init_plh_angles[1],
+                           angles[2] - self.init_plh_angles[2])
+            
+            transf.Translate(x, y, z) #center
+            ##transf.Translate(0, 0, 0) #origin
+            
+            transf.RotateWXYZ(delta_angles[0], self.vectors[2])
+            transf.RotateWXYZ(delta_angles[1], self.vectors[0])
+            transf.RotateWXYZ(delta_angles[2], self.vectors[1])
+            #transf.Scale(1, 1, 1)
+            #transf.Translate(-center[0], -center[1], -center[2]) #- origin
+            #transf.Translate(-orig[0], -orig[1], -orig[2])
+        else:
+            #transf.Translate(-center[0], -center[1], -center[2])
+            transf.Translate(x, y, z) #center
+            #transf.RotateWXYZ(90, 3.0, 1.0, 0.5)
+        try:    
+            self.coilActor.SetUserMatrix(transf.GetMatrix())
+        except:
+            None
+        self.ball_reference.SetCenter(x, y, z)
+        self.axisAssembly.SetPosition(x, y, z)
+        
+##        print "center 2: ", self.coilActor.GetCenter()
+##        print "orig 2: ", self.coilActor.GetOrigin()
+        #print "bounds 2: ", self.coilActor.GetBounds()
+##        print "angles 2: ", self.coilActor.GetOrientation()
+##        print "ball center: ", self.ball_reference.GetCenter()
+        
+        #a = self.coilActor.GetOrientation()
+        #b = self.coilActor.GetOrientationWXYZ()
+        #print "soh o orientation: ", a
+##        print "orient com wxyz", b
+        ##self.coilActor.SetPosition(x, y, z)
+        ##self.ball_reference.SetCenter(x, y, z)
+
+    def SetVolumeCamera(self, pubsub_evt):
+        
+        coord = pubsub_evt.data
+         
+        if len(coord) == 6:
+            coord_camera = coord[0:3]
+            angles = coord[3:6]
+        else:
+            coord_camera = coord[0:3]
+            angles = None
+
+        self.SetBallReferencePosition(coord_camera, angles)
+        
+        #Coronal Images dont require this transformation - 1 tested
+        #and for this case, at navigation, the z axis is inverted
+        coord_camera = np.array(bases.flip_x(coord_camera))
+
+        cam = self.ren.GetActiveCamera()
+         
+        if self.initial_foco is None:
+            self.initial_foco = np.array(cam.GetFocalPoint())
+
+        cam_initialposition = np.array(cam.GetPosition())
+        cam_initialfoco = np.array(cam.GetFocalPoint())
+         
+        cam_sub = cam_initialposition - cam_initialfoco
+        cam_sub_norm = np.linalg.norm(cam_sub)
+        #vet1 = cam_sub/cam_sub_norm
+         
+        cam_sub_novo = coord_camera - self.initial_foco
+        cam_sub_novo_norm = np.linalg.norm(cam_sub_novo)
+        vet2 = cam_sub_novo/cam_sub_novo_norm
+        vet2 = vet2*cam_sub_norm + coord_camera
+
+        cam.SetFocalPoint(coord_camera)
+        cam.SetPosition(vet2)
+        
+        self.UpdateRender()
+
+    # ======aji ==============================================================
+    def RemoveMarkers(self, pubsub_evt):
+        ballid=pubsub_evt.data
+        for i in range(0, ballid + 1):
+            self.ren.RemoveActor(self.staticballs[i]) 
+        self.UpdateRender()      
+            
+    def HideShowObject(self, pubsub_evt):
+         objectbin = pubsub_evt.data
+         if objectbin == True:
+             self.coilActor.SetVisibility(1)
+             self.UpdateRender()
+         if objectbin == False:
+             self.coilActor.SetVisibility(0)
+             self.UpdateRender()        
+
+    def CoilAngleTracking(self, pubsub_evt):
+         self.coil_axis = pubsub_evt.data[0]
+         self.ap_axis = pubsub_evt.data[1]
+             
+    def ShowAngles(self):        
+         angles_text = self.angles_text = vtku.TextZero()
+         self.angles_text.ShadowOff()
+         self.angles_text.SetColour((0,0,0))
+         self.angles_text.SetPosition(const.TEXT_POS_LEFT_UP)
+         self.angles_text.SetVerticalJustificationToCentered()
+         self.ren.AddActor(self.angles_text.actor) 
+             
+    def UpAngles(self, pubsub_evt):
+         self.angles_text.Show()
+         mat3D = np.matrix([[self.ct.GetElement(0,0), self.ct.GetElement(0, 1),
+                             self.ct.GetElement(0,2)],
+                            [self.ct.GetElement(1,0), self.ct.GetElement(1, 1),
+                             self.ct.GetElement(1,2)],
+                            [self.ct.GetElement(2,0), self.ct.GetElement(2, 1),
+                             self.ct.GetElement(2,2)]])
+         p1 = mat3D*(self.coil_axis[0])
+         p2 = mat3D*(self.coil_axis[1])
+         print "ap and coil axis: ", self.ap_axis, p2-p1
+         ang = bases.angle_calculation(self.ap_axis, p2-p1)
+         ang = abs(ang-180.0)
+         self.angles_text.SetValue('Coil Angle: %.2f'%(ang))     
+             
+    def HideAnglesActor(self, pubsub_evt):
+         self.angles_text.Hide() 
+         self.UpdateRender()
+         
+    def ShowObject(self, pubsub_evt):
+        self.ShowObj = pubsub_evt.data
+        self.ChangeInitCoilAngle(self.ShowObj)
+        # ========================================================================
 
     def CreateBallReference(self):
+        MRAD = 3.0
+        proj = prj.Project()
+        s = proj.spacing
+        # The sphere's radius will be MRAD times bigger than the media of the
+        # spacing values.
+        r = (s[0] + s[1] + s[2]) / 3.0 * MRAD
         self.ball_reference = vtk.vtkSphereSource()
-        self.ball_reference.SetRadius(5)
+        self.ball_reference.SetRadius(r)
 
         mapper = vtk.vtkPolyDataMapper()
         mapper.SetInput(self.ball_reference.GetOutput())
@@ -171,36 +534,69 @@ class Viewer(wx.Panel):
         self.ball_actor.SetMapper(mapper)
         self.ball_actor.SetProperty(p)
 
-    def ActivateBallReference(self, pubsub_evt):
-        if not self.ball_reference:
-            self.CreateBallReference()
-        self.ren.AddActor(self.ball_actor)
-
-    def DeactivateBallReference(self, pubsub_evt):
+    def RemoveBallReference(self):
+        self._ball_ref_visibility = False
         if self.ball_reference:
             self.ren.RemoveActor(self.ball_actor)
 
+    def ActivateBallReference(self, pubsub_evt):
+        self._mode_cross = True
+        self._ball_ref_visibility = True
+        if self._to_show_ball:
+            if not self.ball_reference:
+                self.CreateBallReference()
+            self.ren.AddActor(self.ball_actor)
+
+    def DeactivateBallReference(self, pubsub_evt):
+        self._mode_cross = False
+        self.RemoveBallReference()
+
+    def _check_ball_reference(self, pubsub_evt):
+        st = pubsub_evt.data
+        if st == const.SLICE_STATE_CROSS:
+            self._mode_cross = True
+            self._check_and_set_ball_visibility()
+            self.interactor.Render()
+
+    def _uncheck_ball_reference(self, pubsub_evt):
+        st = pubsub_evt.data
+        if st == const.SLICE_STATE_CROSS:
+            self._mode_cross = False
+            self.RemoveBallReference()
+            self.interactor.Render()
+
+    def OnShowSurface(self, pubsub_evt):
+        index, value = pubsub_evt.data
+        if value:
+            self._to_show_ball += 1
+        else:
+            self._to_show_ball -= 1
+        self._check_and_set_ball_visibility()
+	# see if these two next functions are being used
     def SetBallReferencePosition(self, pubsub_evt):
         x, y, z = pubsub_evt.data
         self.ball_reference.SetCenter(x, y, z)
 
     def SetBallReferencePositionBasedOnBound(self, pubsub_evt):
-        coord = pubsub_evt.data
-        x, y, z = bases.FlipY(coord)
-        self.ball_reference.SetCenter(x, y, z)
-        
+        if self._to_show_ball:
+            self.ActivateBallReference(None)
+            coord = pubsub_evt.data
+            x, y, z = bases.flip_x(coord)
+            self.ball_reference.SetCenter(x, y, z)
+        else:
+            self.DeactivateBallReference(None)
+
     def OnStartSeed(self, pubsub_evt):
         index = pubsub_evt.data
         self.seed_points = []
     
     def OnEndSeed(self, pubsub_evt):
-        ps.Publisher().sendMessage("Create surface from seeds",
+        Publisher.sendMessage("Create surface from seeds",
                                     self.seed_points) 
 
     def OnExportPicture(self, pubsub_evt):
-        ps.Publisher().sendMessage('Begin busy cursor')
+        Publisher.sendMessage('Begin busy cursor')
         id, filename, filetype = pubsub_evt.data
-        
         if id == const.VOLUME:
             if filetype == const.FILETYPE_POV:
                 renwin = self.interactor.GetRenderWindow()
@@ -218,7 +614,6 @@ class Viewer(wx.Panel):
 
                 image = image.GetOutput()
 
-
                 # write image file
                 if (filetype == const.FILETYPE_BMP):
                     writer = vtk.vtkBMPWriter()
@@ -235,9 +630,7 @@ class Viewer(wx.Panel):
                 writer.SetInput(image)
                 writer.SetFileName(filename)
                 writer.Write()
-        ps.Publisher().sendMessage('End busy cursor')
-
-
+        Publisher.sendMessage('End busy cursor')
  
     def OnCloseProject(self, pubsub_evt):
         if self.raycasting_volume:
@@ -247,7 +640,7 @@ class Viewer(wx.Panel):
             self.slice_plane.Disable()
             self.slice_plane.DeletePlanes()
             del self.slice_plane
-            ps.Publisher().sendMessage('Uncheck image plane menu')
+            Publisher.sendMessage('Uncheck image plane menu')
             self.mouse_pressed = 0
             self.on_wl = False
             self.slice_plane = 0
@@ -260,6 +653,26 @@ class Viewer(wx.Panel):
         if self.on_wl:
             self.text.Show()
             self.interactor.Render()
+
+    def AddActors(self, pubsub_evt):
+        "Inserting actors"
+        actors = pubsub_evt.data[0]
+        for actor in actors:
+            self.ren.AddActor(actor)
+
+    def RemoveVolume(self, pub_evt):
+        volumes = self.ren.GetVolumes()
+        if (volumes.GetNumberOfItems()):
+            self.ren.RemoveVolume(volumes.GetLastProp())
+            self.interactor.Render()
+            self._to_show_ball -= 1
+            self._check_and_set_ball_visibility()
+
+    def RemoveActors(self, pubsub_evt):
+        "Remove a list of actors"
+        actors = pubsub_evt.data[0]
+        for actor in actors:
+            self.ren.RemoveActor(actor)
 
     def AddPointReference(self, position, radius=1, colour=(1, 0, 0)):
         """
@@ -334,8 +747,21 @@ class Viewer(wx.Panel):
               const.VOLUME_STATE_SEED:
                     {
                     "LeftButtonPressEvent": self.OnInsertSeed
-                    }
+                    },
+              const.STATE_MEASURE_DISTANCE:
+                  {
+                  "LeftButtonPressEvent": self.OnInsertLinearMeasurePoint
+                  },
+              const.STATE_MEASURE_ANGLE:
+                  {
+                  "LeftButtonPressEvent": self.OnInsertAngularMeasurePoint
+                  }
               }
+
+        if self._last_state in (const.STATE_MEASURE_DISTANCE,
+                const.STATE_MEASURE_ANGLE):
+            if self.measures and not self.measures[-1].text_actor:
+                del self.measures[-1]
 
         if state == const.STATE_WL:
             self.on_wl = True
@@ -346,6 +772,10 @@ class Viewer(wx.Panel):
             self.on_wl = False
             self.text.Hide()
             self.interactor.Render()
+
+        if state in (const.STATE_MEASURE_DISTANCE,
+                const.STATE_MEASURE_ANGLE):
+            self.interactor.SetPicker(self.measure_picker)
 
         if (state == const.STATE_ZOOM_SL):
             style = vtk.vtkInteractorStyleRubberBandZoom()
@@ -360,6 +790,8 @@ class Viewer(wx.Panel):
             for event in action[state]:
                 # Bind event
                 style.AddObserver(event,action[state][event])
+
+        self._last_state = state
 
     def OnSpinMove(self, evt, obj):
         if (self.mouse_pressed):
@@ -406,9 +838,9 @@ class Viewer(wx.Panel):
             diff_x = mouse_x - self.last_x
             diff_y = mouse_y - self.last_y
             self.last_x, self.last_y = mouse_x, mouse_y
-            ps.Publisher().sendMessage('Set raycasting relative window and level',
+            Publisher.sendMessage('Set raycasting relative window and level',
                 (diff_x, diff_y))
-            ps.Publisher().sendMessage('Refresh raycasting widget points', None)
+            Publisher.sendMessage('Refresh raycasting widget points', None)
             self.interactor.Render()
 
     def OnWindowLevelClick(self, obj, evt):
@@ -444,7 +876,7 @@ class Viewer(wx.Panel):
     def SetVolumeCamera(self, pubsub_evt):
         
         coord_camera = pubsub_evt.data
-        coord_camera = numpy.array(bases.FlipY(coord_camera))
+        coord_camera = numpy.array(bases.flip_x(coord_camera))
         
         cam = self.ren.GetActiveCamera()
         
@@ -465,7 +897,7 @@ class Viewer(wx.Panel):
         
         cam.SetFocalPoint(coord_camera)
         cam.SetPosition(vet2)
-    
+
     def OnExportSurface(self, pubsub_evt):
         filename, filetype = pubsub_evt.data
         fileprefix = filename.split(".")[-2]
@@ -481,6 +913,12 @@ class Viewer(wx.Panel):
             writer = vtk.vtkVRMLExporter()
             writer.SetFileName(filename)
             writer.SetInput(renwin)
+            writer.Write()
+        elif filetype == const.FILETYPE_X3D:
+            writer = vtk.vtkX3DExporter()
+            writer.SetInput(renwin)
+            writer.SetFileName(filename)
+            writer.Update()
             writer.Write()
         elif filetype == const.FILETYPE_OBJ:
             writer = vtk.vtkOBJExporter()
@@ -510,13 +948,18 @@ class Viewer(wx.Panel):
             self.text.SetValue("WL: %d  WW: %d"%(wl, ww))
 
     def OnShowRaycasting(self, pubsub_evt):
-        self.raycasting_volume = True
-        if self.on_wl:
-            self.text.Show()
+        if not self.raycasting_volume:
+            self.raycasting_volume = True
+            self._to_show_ball += 1
+            self._check_and_set_ball_visibility()
+            if self.on_wl:
+                self.text.Show()
 
     def OnHideRaycasting(self, pubsub_evt):
         self.raycasting_volume = False
         self.text.Hide()
+        self._to_show_ball -= 1
+        self._check_and_set_ball_visibility()
 
     def OnSize(self, evt):
         self.UpdateRender()
@@ -532,7 +975,7 @@ class Viewer(wx.Panel):
 
     def LoadActor(self, pubsub_evt):
         actor = pubsub_evt.data
-
+        self.added_actor = 1
         ren = self.ren
         ren.AddActor(actor)
 
@@ -545,6 +988,8 @@ class Viewer(wx.Panel):
 
         #self.ShowOrientationCube()
         self.interactor.Render()
+        self._to_show_ball += 1
+        self._check_and_set_ball_visibility()
 
     def RemoveActor(self, pubsub_evt):
         utils.debug("RemoveActor")
@@ -552,11 +997,20 @@ class Viewer(wx.Panel):
         ren = self.ren
         ren.RemoveActor(actor)
         self.interactor.Render()
+        self._to_show_ball -= 1
+        self._check_and_set_ball_visibility()
+	
+        #=====aji==================================================================
+        try:
+            Publisher.sendMessage('Del actor volume')
+        except:
+            None
+        #=======================================================================
         
     def RemoveAllActor(self, pubsub_evt):
         utils.debug("RemoveAllActor")
         self.ren.RemoveAllProps()
-        ps.Publisher().sendMessage('Render volume viewer')
+        Publisher.sendMessage('Render volume viewer')
 
         
     def LoadSlicePlane(self, pubsub_evt):
@@ -564,6 +1018,7 @@ class Viewer(wx.Panel):
 
     def LoadVolume(self, pubsub_evt):
         self.raycasting_volume = True
+        #self._to_show_ball += 1
 
         volume = pubsub_evt.data[0]
         colour = pubsub_evt.data[1]
@@ -587,7 +1042,16 @@ class Viewer(wx.Panel):
             self.ren.ResetCamera()
             self.ren.ResetCameraClippingRange()
 
+        self._check_and_set_ball_visibility()
         self.UpdateRender()
+
+    def UnloadVolume(self, pubsub_evt):
+        volume = pubsub_evt.data
+        self.ren.RemoveVolume(volume)
+        del volume
+        self.raycasting_volume = False
+        self._to_show_ball -= 1
+        self._check_and_set_ball_visibility()
 
     def OnSetViewAngle(self, evt_pubsub):
         view = evt_pubsub.data
@@ -600,8 +1064,8 @@ class Viewer(wx.Panel):
         proj = prj.Project()
         orig_orien = proj.original_orientation
 
-        xv,yv,zv = const.VOLUME_POSITION[orig_orien][0][view]
-        xp,yp,zp = const.VOLUME_POSITION[orig_orien][1][view]
+        xv,yv,zv = const.VOLUME_POSITION[const.AXIAL][0][view]
+        xp,yp,zp = const.VOLUME_POSITION[const.AXIAL][1][view]
 
         cam.SetViewUp(xv,yv,zv)
         cam.SetPosition(xp,yp,zp)
@@ -662,198 +1126,190 @@ class Viewer(wx.Panel):
         self.seed_points.append(point_id)
         self.interactor.Render()
 
+    def OnInsertLinearMeasurePoint(self, obj, evt):
+        x,y = self.interactor.GetEventPosition()
+        self.measure_picker.Pick(x, y, 0, self.ren)
+        x, y, z = self.measure_picker.GetPickPosition()
+        
+        proj = prj.Project()
+        radius = min(proj.spacing) * PROP_MEASURE
+        if self.measure_picker.GetActor(): 
+            # if not self.measures or self.measures[-1].IsComplete():
+                # m = measures.LinearMeasure(self.ren)
+                # m.AddPoint(x, y, z)
+                # self.measures.append(m)
+            # else:
+                # m = self.measures[-1]
+                # m.AddPoint(x, y, z)
+                # if m.IsComplete():
+                    # Publisher.sendMessage("Add measure to list", 
+                            # (u"3D", _(u"%.3f mm" % m.GetValue())))
+            Publisher.sendMessage("Add measurement point",
+                    ((x, y,z), const.LINEAR, const.SURFACE, radius))
+            self.interactor.Render()
+
+    def OnInsertAngularMeasurePoint(self, obj, evt):
+        x,y = self.interactor.GetEventPosition()
+        self.measure_picker.Pick(x, y, 0, self.ren)
+        x, y, z = self.measure_picker.GetPickPosition()
+
+        proj = prj.Project()
+        radius = min(proj.spacing) * PROP_MEASURE
+        if self.measure_picker.GetActor(): 
+            # if not self.measures or self.measures[-1].IsComplete():
+                # m = measures.AngularMeasure(self.ren)
+                # m.AddPoint(x, y, z)
+                # self.measures.append(m)
+            # else:
+                # m = self.measures[-1]
+                # m.AddPoint(x, y, z)
+                # if m.IsComplete():
+                    # index = len(self.measures) - 1
+                    # name = "M"
+                    # colour = m.colour
+                    # type_ = _("Angular")
+                    # location = u"3D"
+                    # value = u"%.2f˚"% m.GetValue()
+                    # msg =  'Update measurement info in GUI',
+                    # Publisher.sendMessage(msg,
+                                               # (index, name, colour,
+                                                # type_, location,
+                                                # value))
+            Publisher.sendMessage("Add measurement point",
+                    ((x, y,z), const.ANGULAR, const.SURFACE, radius))
+            self.interactor.Render()
+
+    def Reposition3DPlane(self, evt_pubsub):
+        position = evt_pubsub.data
+        if not(self.added_actor) and not(self.raycasting_volume):
+            if not(self.repositioned_axial_plan) and (position == 'Axial'):
+                self.SetViewAngle(const.VOL_ISO)
+                self.repositioned_axial_plan = 1
+
+            elif not(self.repositioned_sagital_plan) and (position == 'Sagital'):
+                self.SetViewAngle(const.VOL_ISO)
+                self.repositioned_sagital_plan = 1
+
+            elif not(self.repositioned_coronal_plan) and (position == 'Coronal'):
+                self.SetViewAngle(const.VOL_ISO)
+                self.repositioned_coronal_plan = 1
+
+    def _check_and_set_ball_visibility(self):
+        if self._mode_cross:
+            if self._to_show_ball > 0 and not self._ball_ref_visibility:
+                self.ActivateBallReference(None)
+                self.interactor.Render()
+            elif not self._to_show_ball and self._ball_ref_visibility:
+                self.RemoveBallReference()
+                self.interactor.Render()
+            
 
 class SlicePlane:
     def __init__(self):
         project = prj.Project()
         self.original_orientation = project.original_orientation
         self.Create()
+        self.enabled = False
         self.__bind_evt()
-        self.__bind_vtk_evt()
 
     def __bind_evt(self):
-        ps.Publisher().subscribe(self.Enable, 'Enable plane')
-        ps.Publisher().subscribe(self.Disable, 'Disable plane')
-        ps.Publisher().subscribe(self.ChangeSlice, 'Change slice from slice plane')
-
-    def __bind_vtk_evt(self):
-        self.plane_x.AddObserver("InteractionEvent", self.PlaneEvent)
-        self.plane_y.AddObserver("InteractionEvent", self.PlaneEvent)
-        self.plane_z.AddObserver("InteractionEvent", self.PlaneEvent)
-
-    def PlaneEvent(self, obj, evt):
-        number = obj.GetSliceIndex()
-        plane_axis = obj.GetPlaneOrientation()
-        if (self.original_orientation == const.AXIAL):
-            if (plane_axis == 0):
-                orientation = "SAGITAL"
-            elif(plane_axis == 1):
-                orientation = "CORONAL"
-                dimen = obj.GetInput().GetDimensions()
-                number = abs(dimen[0] - (number + 1))
-            else:
-                orientation = "AXIAL"
-
-        elif(self.original_orientation == const.SAGITAL):
-            if (plane_axis == 0):
-                orientation = "CORONAL"
-            elif(plane_axis == 1):
-                orientation = "AXIAL"
-                dimen = obj.GetInput().GetDimensions()
-                number = abs(dimen[0] - (number + 1))
-            else:
-                orientation = "SAGITAL"
-        else:
-            if (plane_axis == 0):
-                orientation = "SAGITAL"
-            elif(plane_axis == 1):
-                orientation = "AXIAL"
-                dimen = obj.GetInput().GetDimensions()
-                number = abs(dimen[0] - (number + 1))
-            else:
-                orientation = "CORONAL"
-
-        if (obj.GetSlicePosition() != 0.0):
-            ps.Publisher().sendMessage(('Set scroll position', \
-                                        orientation), number)
+        Publisher.subscribe(self.Enable, 'Enable plane')
+        Publisher.subscribe(self.Disable, 'Disable plane')
+        Publisher.subscribe(self.ChangeSlice, 'Change slice from slice plane')
+        Publisher.subscribe(self.UpdateAllSlice, 'Update all slice')
 
     def Create(self):
         plane_x = self.plane_x = vtk.vtkImagePlaneWidget()
-        plane_x.DisplayTextOff()
-        ps.Publisher().sendMessage('Input Image in the widget', plane_x)
+        plane_x.InteractionOff()
+        #Publisher.sendMessage('Input Image in the widget', 
+                                                #(plane_x, 'SAGITAL'))
         plane_x.SetPlaneOrientationToXAxes()
         plane_x.TextureVisibilityOn()
-        plane_x.SetLeftButtonAction(1)
+        plane_x.SetLeftButtonAction(0)
         plane_x.SetRightButtonAction(0)
-        prop1 = plane_x.GetPlaneProperty()
-        prop1.SetColor(0, 0, 1)
+        plane_x.SetMiddleButtonAction(0)
         cursor_property = plane_x.GetCursorProperty()
         cursor_property.SetOpacity(0) 
 
         plane_y = self.plane_y = vtk.vtkImagePlaneWidget()
         plane_y.DisplayTextOff()
-        ps.Publisher().sendMessage('Input Image in the widget', plane_y)
+        #Publisher.sendMessage('Input Image in the widget', 
+                                                #(plane_y, 'CORONAL'))
         plane_y.SetPlaneOrientationToYAxes()
         plane_y.TextureVisibilityOn()
-        plane_y.SetLeftButtonAction(1)
+        plane_y.SetLeftButtonAction(0)
         plane_y.SetRightButtonAction(0)
+        plane_y.SetMiddleButtonAction(0)
         prop1 = plane_y.GetPlaneProperty()
-        prop1.SetColor(0, 1, 0)
         cursor_property = plane_y.GetCursorProperty()
         cursor_property.SetOpacity(0) 
 
         plane_z = self.plane_z = vtk.vtkImagePlaneWidget()
-        plane_z.DisplayTextOff()
-        ps.Publisher().sendMessage('Input Image in the widget', plane_z)
+        plane_z.InteractionOff()
+        #Publisher.sendMessage('Input Image in the widget', 
+                                                #(plane_z, 'AXIAL'))
         plane_z.SetPlaneOrientationToZAxes()
         plane_z.TextureVisibilityOn()
-        plane_z.SetLeftButtonAction(1)
+        plane_z.SetLeftButtonAction(0)
         plane_z.SetRightButtonAction(0)
-        prop1 = plane_z.GetPlaneProperty()
-        prop1.SetColor(1, 0, 0)
+        plane_z.SetMiddleButtonAction(0)
+       
         cursor_property = plane_z.GetCursorProperty()
         cursor_property.SetOpacity(0) 
 
-        if(self.original_orientation == const.AXIAL):
-            prop3 = plane_z.GetPlaneProperty()
-            prop3.SetColor(1, 0, 0)
 
-            prop1 = plane_x.GetPlaneProperty()
-            prop1.SetColor(0, 0, 1)
+        prop3 = plane_z.GetPlaneProperty()
+        prop3.SetColor(1, 0, 0)
+        
+        selected_prop3 = plane_z.GetSelectedPlaneProperty() 
+        selected_prop3.SetColor(1,0,0)
+    
+        prop1 = plane_x.GetPlaneProperty()
+        prop1.SetColor(0, 0, 1)
 
-            prop2 = plane_y.GetPlaneProperty()
-            prop2.SetColor(0, 1, 0)
+        selected_prop1 = plane_x.GetSelectedPlaneProperty()           
+        selected_prop1.SetColor(0, 0, 1)
+        
+        prop2 = plane_y.GetPlaneProperty()
+        prop2.SetColor(0, 1, 0)
 
-        elif(self.original_orientation == const.SAGITAL):
-            prop3 = plane_y.GetPlaneProperty()
-            prop3.SetColor(1, 0, 0)
+        selected_prop2 = plane_y.GetSelectedPlaneProperty()           
+        selected_prop2.SetColor(0, 1, 0)
 
-            prop1 = plane_z.GetPlaneProperty()
-            prop1.SetColor(0, 0, 1)
-
-            prop2 = plane_x.GetPlaneProperty()
-            prop2.SetColor(0, 1, 0)
-
-        else:
-            prop3 = plane_y.GetPlaneProperty()
-            prop3.SetColor(1, 0, 0)
-
-            prop1 = plane_x.GetPlaneProperty()
-            prop1.SetColor(0, 0, 1)
-
-            prop2 = plane_z.GetPlaneProperty()
-            prop2.SetColor(0, 1, 0)
-
-        ps.Publisher().sendMessage('Set Widget Interactor', plane_x)
-        ps.Publisher().sendMessage('Set Widget Interactor', plane_y)
-        ps.Publisher().sendMessage('Set Widget Interactor', plane_z)
+        Publisher.sendMessage('Set Widget Interactor', plane_x)
+        Publisher.sendMessage('Set Widget Interactor', plane_y)
+        Publisher.sendMessage('Set Widget Interactor', plane_z)
 
         self.Render()
 
     def Enable(self, evt_pubsub=None):
         if (evt_pubsub):
             label = evt_pubsub.data
-
-            if(self.original_orientation == const.AXIAL):
-                if(label == "Axial"):
-                    self.plane_z.On()
-                elif(label == "Coronal"):
-                    self.plane_y.On()
-                elif(label == "Sagital"):
-                    self.plane_x.On()
-                    a = self.plane_x.GetTexturePlaneProperty()
-                    a.SetBackfaceCulling(0)
-                    c = self.plane_x.GetTexture()
-                    c.SetRestrictPowerOf2ImageSmaller(1)
-
-            elif(self.original_orientation == const.SAGITAL):
-                if(label == "Axial"):
-                    self.plane_y.On()
-                elif(label == "Coronal"):
-                    self.plane_x.On()
-                elif(label == "Sagital"):
-                    self.plane_z.On()
-            else:
-                if(label == "Axial"):
-                    self.plane_y.On()
-                elif(label == "Coronal"):
-                    self.plane_z.On()
-                elif(label == "Sagital"):
-                    self.plane_x.On()
+            if(label == "Axial"):
+                self.plane_z.On()
+            elif(label == "Coronal"):
+                self.plane_y.On()
+            elif(label == "Sagital"):
+                self.plane_x.On()
+        
+            Publisher.sendMessage('Reposition 3D Plane', label)
 
         else:
             self.plane_z.On()
             self.plane_x.On()
             self.plane_y.On()
-            ps.Publisher().sendMessage('Set volume view angle', const.VOL_ISO)
+            Publisher.sendMessage('Set volume view angle', const.VOL_ISO)
         self.Render()
 
     def Disable(self, evt_pubsub=None):
         if (evt_pubsub):
             label = evt_pubsub.data
-
-            if(self.original_orientation == const.AXIAL):
-                if(label == "Axial"):
-                    self.plane_z.Off()
-                elif(label == "Coronal"):
-                    self.plane_y.Off()
-                elif(label == "Sagital"):
-                    self.plane_x.Off()
-
-            elif(self.original_orientation == const.SAGITAL):
-                if(label == "Axial"):
-                    self.plane_y.Off()
-                elif(label == "Coronal"):
-                    self.plane_x.Off()
-                elif(label == "Sagital"):
-                    self.plane_z.Off()
-            else:
-                if(label == "Axial"):
-                    self.plane_y.Off()
-                elif(label == "Coronal"):
-                    self.plane_z.Off()
-                elif(label == "Sagital"):
-                    self.plane_x.Off()
+            if(label == "Axial"):
+                self.plane_z.Off()
+            elif(label == "Coronal"):
+                self.plane_y.Off()
+            elif(label == "Sagital"):
+                self.plane_x.Off()
         else:
             self.plane_z.Off()
             self.plane_x.Off()
@@ -862,47 +1318,26 @@ class SlicePlane:
         self.Render()
 
     def Render(self):
-        ps.Publisher().sendMessage('Render volume viewer')    
+        Publisher.sendMessage('Render volume viewer')    
 
     def ChangeSlice(self, pubsub_evt = None):
         orientation, number = pubsub_evt.data
 
-        if (self.original_orientation == const.AXIAL):
-            if (orientation == "CORONAL"):
-                self.SetSliceNumber(number, "Y")
-            elif(orientation == "SAGITAL"):
-                self.SetSliceNumber(number, "X")
-            else:
-                self.SetSliceNumber(number, "Z")
+        if  orientation == "CORONAL" and self.plane_y.GetEnabled():
+            Publisher.sendMessage('Update slice 3D', (self.plane_y,orientation))
+            self.Render()
+        elif orientation == "SAGITAL" and self.plane_x.GetEnabled():
+            Publisher.sendMessage('Update slice 3D', (self.plane_x,orientation))
+            self.Render()
+        elif orientation == 'AXIAL' and self.plane_z.GetEnabled() :
+            Publisher.sendMessage('Update slice 3D', (self.plane_z,orientation))
+            self.Render()
 
-        elif(self.original_orientation == const.SAGITAL):
-            if (orientation == "CORONAL"):
-                self.SetSliceNumber(number, "X")
-            elif(orientation == "SAGITAL"):
-                self.SetSliceNumber(number, "Z")
-            else:
-                self.SetSliceNumber(number, "Y")
-
-        else:
-            if (orientation == "CORONAL"):
-                self.SetSliceNumber(number, "Z")
-            elif(orientation == "SAGITAL"):
-                self.SetSliceNumber(number, "X")
-            else:
-                self.SetSliceNumber(number, "Y")
-
-        self.Render()
-
-    def SetSliceNumber(self, number, axis):
-        if (axis == "X"):
-            self.plane_x.SetPlaneOrientationToXAxes()
-            self.plane_x.SetSliceIndex(number)
-        elif(axis == "Y"):
-            self.plane_y.SetPlaneOrientationToYAxes()
-            self.plane_y.SetSliceIndex(number)
-        else:
-            self.plane_z.SetPlaneOrientationToZAxes()
-            self.plane_z.SetSliceIndex(number)
+    def UpdateAllSlice(self, pubsub_evt):
+        Publisher.sendMessage('Update slice 3D', (self.plane_y,"CORONAL"))
+        Publisher.sendMessage('Update slice 3D', (self.plane_x,"SAGITAL"))
+        Publisher.sendMessage('Update slice 3D', (self.plane_z,"AXIAL"))
+               
 
     def DeletePlanes(self):
         del self.plane_x

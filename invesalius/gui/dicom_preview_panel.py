@@ -22,17 +22,21 @@
 
 #TODO: To create a beautiful API
 import time
+import tempfile
 
 import wx
 import vtk
 
 from vtk.util import  numpy_support
 from vtk.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteractor
+from wx.lib.pubsub import pub as Publisher
 
 import constants as const
 from reader import dicom_reader
 import data.vtk_utils as vtku
 import utils
+import vtkgdcm
+
 
 NROWS = 3
 NCOLS = 6
@@ -65,6 +69,7 @@ EVT_CLICK_SERIE = wx.PyEventBinder(myEVT_CLICK_SERIE, 1)
 myEVT_CLICK = wx.NewEventType()
 EVT_CLICK = wx.PyEventBinder(myEVT_CLICK, 1)
 
+
 class SelectionEvent(wx.PyCommandEvent):
     pass
 
@@ -82,9 +87,15 @@ class PreviewEvent(wx.PyCommandEvent):
     def GetItemData(self):
         return self.data
 
+    def GetPressedShift(self):
+        return self.pressed_shift
+    
     def SetItemData(self, data):
         self.data = data
 
+    def SetShiftStatus(self, status):
+        self.pressed_shift = status
+    
 
 class SerieEvent(PreviewEvent):
     def __init__(self , evtType, id):
@@ -102,27 +113,18 @@ class DicomInfo(object):
         self.subtitle = subtitle
         self._preview = None
         self.selected = False
+        self.filename = ""
 
     @property
     def preview(self):
-        if self._preview:
-            return self._preview
-        else:
-            colorer = vtk.vtkImageMapToWindowLevelColors()
-            colorer.SetInput(self.dicom.image.imagedata)
-            colorer.SetWindow(float(self.dicom.image.window))
-            colorer.SetLevel(float(self.dicom.image.level))
-            colorer.SetOutputFormatToRGB()
-            colorer.Update()
-
-            width, height, z = colorer.GetOutput().GetDimensions()
-
-            r = colorer.GetOutput().GetPointData().GetScalars()
-            ni = numpy_support.vtk_to_numpy(r)
-            self.img = wx.ImageFromBuffer(width, height, ni)
-            self._preview = self.img.Mirror(False)
-            return self._preview
-
+        
+        if not self._preview:
+            bmp = wx.Bitmap(self.dicom.image.thumbnail_path, wx.BITMAP_TYPE_PNG)
+            self._preview = bmp.ConvertToImage()
+        return self._preview
+        
+    def release_thumbnail(self):
+        self._preview = None
 
 class DicomPaintPanel(wx.Panel):
     def __init__(self, parent):
@@ -234,6 +236,9 @@ class Preview(wx.Panel):
         """
         Set a dicom to preview.
         """
+        if self.dicom_info:
+            self.dicom_info.release_thumbnail()
+
         self.dicom_info = dicom_info
         self.SetTitle(dicom_info.title)
         self.SetSubtitle(dicom_info.subtitle)
@@ -264,6 +269,12 @@ class Preview(wx.Panel):
             self.SetBackgroundColour(c)
 
     def OnSelect(self, evt):
+
+        shift_pressed = False
+        if evt.m_shiftDown:
+            shift_pressed = True
+
+        dicom_id = self.dicom_info.id
         self.select_on = True
         self.dicom_info.selected = True
         ##c = wx.SystemSettings_GetColour(wx.SYS_COLOUR_BTNHIGHLIGHT)
@@ -284,8 +295,11 @@ class Preview(wx.Panel):
         my_evt = SerieEvent(myEVT_PREVIEW_CLICK, self.GetId())
         my_evt.SetSelectedID(self.dicom_info.id)
         my_evt.SetItemData(self.dicom_info.dicom)
+        my_evt.SetShiftStatus(shift_pressed)
         my_evt.SetEventObject(self)
         self.GetEventHandler().ProcessEvent(my_evt)
+        evt.Skip()
+        
 
     def OnSize(self, evt):
         if self.dicom_info:
@@ -392,7 +406,7 @@ class DicomPreviewSeries(wx.Panel):
                               group.dicom.acquisition.serie_number),
                              group.dicom,
                              group.title,
-                             _("%d Images") %(group.nslices))
+                             _("%d images") %(group.nslices))
             self.files.append(info)
             n+=1
 
@@ -405,7 +419,6 @@ class DicomPreviewSeries(wx.Panel):
     def _display_previews(self):
         initial = self.displayed_position * NCOLS
         final = initial + NUM_PREVIEWS
-
         if len(self.files) < final:
             for i in xrange(final-len(self.files)):
                 try:
@@ -456,6 +469,8 @@ class DicomPreviewSlice(wx.Panel):
         self.nhidden_last_display = 0
         self.selected_dicom = None
         self.selected_panel = None
+        self.first_selection = None
+        self.last_selection = None
         self._init_ui()
 
     def _init_ui(self):
@@ -553,7 +568,6 @@ class DicomPreviewSlice(wx.Panel):
     def _display_previews(self):
         initial = self.displayed_position * NCOLS
         final = initial + NUM_PREVIEWS
-
         if len(self.files) < final:
             for i in xrange(final-len(self.files)):
                 try:
@@ -580,6 +594,34 @@ class DicomPreviewSlice(wx.Panel):
             p.Show()
 
     def OnPreviewClick(self, evt):
+
+        dicom_id = evt.GetSelectID()
+        
+        if self.first_selection is None:
+            self.first_selection = dicom_id
+
+        if self.last_selection is None:
+            self.last_selection = dicom_id  
+
+        
+        if evt.GetPressedShift():
+ 
+            if dicom_id < self.first_selection and dicom_id < self.last_selection:
+                self.first_selection = dicom_id
+            else:
+                self.last_selection = dicom_id
+        else:
+            self.first_selection = dicom_id
+            self.last_selection = dicom_id
+
+            for i in xrange(len(self.files)):
+            
+                if i == dicom_id:
+                    self.files[i].selected = True
+                else:
+                    self.files[i].selected = False
+
+
         my_evt = SerieEvent(myEVT_CLICK_SLICE, self.GetId())
         my_evt.SetSelectedID(evt.GetSelectID())
         my_evt.SetItemData(evt.GetItemData())
@@ -588,10 +630,24 @@ class DicomPreviewSlice(wx.Panel):
             self.selected_dicom.selected = self.selected_dicom is \
                     evt.GetEventObject().dicom_info
             self.selected_panel.select_on = self.selected_panel is evt.GetEventObject()
-            self.selected_panel.Select()
+            
+            if self.first_selection != self.last_selection:
+                for i in xrange(len(self.files)):
+                    if i >= self.first_selection and i <= self.last_selection:
+                        self.files[i].selected = True
+                    else:
+                        self.files[i].selected = False
+
+            else:
+                self.selected_panel.Select()
+
+        self._display_previews()
         self.selected_panel = evt.GetEventObject()
         self.selected_dicom = self.selected_panel.dicom_info
         self.GetEventHandler().ProcessEvent(my_evt)
+
+        Publisher.sendMessage("Selected Import Images", [self.first_selection, \
+                                                                 self.last_selection])  
 
     def OnScroll(self, evt=None):
         if evt:
@@ -756,8 +812,20 @@ class SingleImagePreview(wx.Panel):
         self.text_image_size.SetValue(value)
 
         ## Text related to slice position
-        value1 = STR_SPC %(dicom.image.spacing[2])
-        value2 = STR_LOCAL %(dicom.image.position[2])
+        if not(dicom.image.spacing):
+            value1 = '' 
+        else: 
+            value1 = STR_SPC %(dicom.image.spacing[2])
+        
+        if dicom.image.orientation_label == 'AXIAL':
+            value2 = STR_LOCAL %(dicom.image.position[2])
+        elif dicom.image.orientation_label == 'CORONAL':
+            value2 = STR_LOCAL %(dicom.image.position[1])
+        elif dicom.image.orientation_label == 'SAGITTAL':
+            value2 = STR_LOCAL %(dicom.image.position[0])
+        else:
+            value2 = ''
+
         value = "%s\n%s" %(value1, value2)
         self.text_image_location.SetValue(value)
 
@@ -770,12 +838,17 @@ class SingleImagePreview(wx.Panel):
         value = STR_ACQ % (dicom.acquisition.date,
                             dicom.acquisition.time)
         self.text_acquisition.SetValue(value)
+        
+
+        rdicom = vtkgdcm.vtkGDCMImageReader()
+        rdicom.SetFileName(dicom.image.file)
+        rdicom.Update()
 
         # ADJUST CONTRAST
         window_level = dicom.image.level
         window_width = dicom.image.window
         colorer = vtk.vtkImageMapToWindowLevelColors()
-        colorer.SetInput(dicom.image.imagedata)
+        colorer.SetInput(rdicom.GetOutput())
         colorer.SetWindow(float(window_width))
         colorer.SetLevel(float(window_level))
 

@@ -16,10 +16,13 @@
 #    PARTICULAR. Consulte a Licenca Publica Geral GNU para obter mais
 #    detalhes.
 #--------------------------------------------------------------------------
+import glob
 import os
 import plistlib
 
-import wx.lib.pubsub as ps
+import constants as const
+
+from wx.lib.pubsub import pub as Publisher
 
 from utils import TwoWaysDictionary
 
@@ -64,7 +67,7 @@ class Presets():
         self.__bind_events()
         
     def __bind_events(self):
-        ps.Publisher.subscribe(self.UpdateThresholdModes,
+        Publisher.subscribe(self.UpdateThresholdModes,
                                 'Update threshold limits list')
         
     def UpdateThresholdModes(self, evt):
@@ -93,7 +96,7 @@ class Presets():
                     
                 presets[key] = (t_min, t_max)
                     
-        ps.Publisher().sendMessage('Update threshold limits', (thresh_min,     
+        Publisher.sendMessage('Update threshold limits', (thresh_min,     
                                     thresh_max))
 
     def SavePlist(self, filename):
@@ -164,3 +167,25 @@ class Presets():
         self.thresh_ct = TwoWaysDictionary(thresh_ct_new)
 
 
+
+def get_wwwl_presets():
+    files = glob.glob(os.path.join('..', 'presets', 'raycasting', 'color_list', '*.plist'))
+    presets = {}
+    for f in files:
+        p = os.path.splitext(os.path.basename(f))[0]
+        presets[p] = f
+    return presets
+
+
+def get_wwwl_preset_colours(pfile):
+    preset = plistlib.readPlist(pfile)
+    ncolours = len(preset['Blue'])
+    colours = []
+    for i in xrange(ncolours):
+        r = preset['Red'][i]
+        g = preset['Green'][i]
+        b = preset['Blue'][i]
+
+        colours.append((r, g, b))
+
+    return colours

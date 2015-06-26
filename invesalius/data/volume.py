@@ -18,17 +18,21 @@
 #--------------------------------------------------------------------------
 import plistlib
 import os
+import weakref
 
 import numpy
 import vtk
 import wx
-import wx.lib.pubsub as ps
+from wx.lib.pubsub import pub as Publisher
 
 import constants as const
 import project as prj
-
+import slice_
+import converters
 from data import vtk_utils
 from vtk.util import numpy_support
+import session as ses
+
 
 Kernels = { 
     "Basic Smooth 5x5" : [1.0, 1.0, 1.0, 1.0, 1.0,
@@ -82,26 +86,39 @@ class Volume():
         self.plane = None
         self.plane_on = False
         self.volume = None
+        self.image = None
+        self.loaded_image = 0
+        self.to_reload = False
         self.__bind_events()
 
     def __bind_events(self):
-        ps.Publisher().subscribe(self.OnHideVolume,
+        Publisher.subscribe(self.OnHideVolume,
                                 'Hide raycasting volume')
-        ps.Publisher().subscribe(self.OnUpdatePreset,
+        Publisher.subscribe(self.OnUpdatePreset,
                                 'Update raycasting preset')
-        ps.Publisher().subscribe(self.OnSetCurve,
+        Publisher.subscribe(self.OnSetCurve,
                                 'Set raycasting curve')
-        ps.Publisher().subscribe(self.OnSetWindowLevel,
+        Publisher.subscribe(self.OnSetWindowLevel,
                                 'Set raycasting wwwl')
-        ps.Publisher().subscribe(self.Refresh,
+        Publisher.subscribe(self.Refresh,
                                 'Set raycasting refresh')
-        ps.Publisher().subscribe(self.OnSetRelativeWindowLevel,
+        Publisher.subscribe(self.OnSetRelativeWindowLevel,
                                  'Set raycasting relative window and level')
-        ps.Publisher().subscribe(self.OnEnableTool,
+        Publisher.subscribe(self.OnEnableTool,
                                  'Enable raycasting tool')
-        ps.Publisher().subscribe(self.OnCloseProject, 'Close project data')
-        ps.Publisher().subscribe(self.ChangeBackgroundColour,
+        Publisher.subscribe(self.OnCloseProject, 'Close project data')
+        Publisher.subscribe(self.ChangeBackgroundColour,
                         'Change volume viewer background colour')
+
+        Publisher.subscribe(self.ResetRayCasting, 'Reset Reaycasting')
+
+        Publisher.subscribe(self.OnFlipVolume, 'Flip volume')
+
+    def ResetRayCasting(self, pub_evt):
+        if self.exist:
+            self.exist = None
+            self.LoadVolume()
+
 
     def OnCloseProject(self, pubsub_evt):
         self.CloseProject()
@@ -109,7 +126,7 @@ class Volume():
     def CloseProject(self):
         #if self.plane:
         #    self.plane = None
-        #    ps.Publisher().sendMessage('Remove surface actor from viewer', self.plane_actor)
+        #    Publisher.sendMessage('Remove surface actor from viewer', self.plane_actor)
         if self.plane:
             self.plane.DestroyObjs()
             del self.plane
@@ -117,8 +134,8 @@ class Volume():
             
         if self.exist:
             self.exist = None
-            ps.Publisher().sendMessage('Remove surface actor from viewer', self.volume)
-            ps.Publisher().sendMessage('Disable volume cut menu')
+            Publisher.sendMessage('Remove surface actor from viewer', self.volume)
+            Publisher.sendMessage('Disable volume cut menu')
 
     def OnLoadVolume(self, pubsub_evt):
         label = pubsub_evt.data
@@ -129,16 +146,16 @@ class Volume():
         self.volume.SetVisibility(0)
         if (self.plane and self.plane_on):
             self.plane.Disable()
-        ps.Publisher().sendMessage('Render volume viewer')
+        Publisher.sendMessage('Render volume viewer')
 
-    def OnShowVolume(self, pubsub_evt):
+    def OnShowVolume(self, pubsub_evt = None):
         if self.exist:
             self.volume.SetVisibility(1)
             if (self.plane and self.plane_on):
                 self.plane.Enable()
-            ps.Publisher().sendMessage('Render volume viewer')
+            Publisher.sendMessage('Render volume viewer')
         else:
-            ps.Publisher.sendMessage('Load raycasting preset', const.RAYCASTING_LABEL)
+            Publisher.sendMessage('Load raycasting preset', const.RAYCASTING_LABEL)
             self.LoadConfig()
             self.LoadVolume()
             self.exist = 1
@@ -147,18 +164,47 @@ class Volume():
         self.__load_preset_config()
 
         if self.config:
+            if self.to_reload:
+                self.exist = False
+                Publisher.sendMessage('Unload volume', self.volume)
+                
             if self.exist:
                 self.__load_preset()
                 self.volume.SetVisibility(1)
-                #ps.Publisher().sendMessage('Render volume viewer')
+                #Publisher.sendMessage('Render volume viewer')
             else:
                 self.LoadVolume()
                 self.CalculateHistogram()
                 self.exist = 1
                 
             colour = self.GetBackgroundColour()
-            ps.Publisher.sendMessage('Change volume viewer background colour', colour)
-            ps.Publisher.sendMessage('Change volume viewer gui colour', colour)
+            Publisher.sendMessage('Change volume viewer background colour', colour)
+            Publisher.sendMessage('Change volume viewer gui colour', colour)
+        else:
+            Publisher.sendMessage('Unload volume', self.volume)
+            del self.image
+            del self.imagedata
+            del self.final_imagedata
+            del self.volume
+            del self.color_transfer
+            del self.opacity_transfer_func
+            del self.volume_properties
+            del self.volume_mapper
+            self.volume = None
+            self.exist = False
+            self.loaded_image = False
+            self.image = None
+            self.final_imagedata = None
+            self.opacity_transfer_func = None
+            self.color_transfer = None
+            Publisher.sendMessage('Render volume viewer')
+
+    def OnFlipVolume(self, pubsub_evt):
+        print "Flipping Volume"
+        self.loaded_image = False
+        del self.image
+        self.image = None
+        self.to_reload = True
         
     def __load_preset_config(self):
         self.config = prj.Project().raycasting_preset
@@ -170,7 +216,6 @@ class Volume():
         else:
             self.Create8bColorTable(self.scale)
             self.Create8bOpacityTable(self.scale)
-
 
     def __load_preset(self):   
         # Update colour table
@@ -185,20 +230,19 @@ class Volume():
         self.SetShading()
         self.SetTypeRaycasting()
 
-        
     def OnSetCurve(self, pubsub_evt):
         self.curve = pubsub_evt.data
         self.CalculateWWWL()
         ww = self.ww
         wl = self.wl
-        ps.Publisher().sendMessage('Set volume window and level text',
+        Publisher.sendMessage('Set volume window and level text',
                                    (ww, wl))
 
     def OnSetRelativeWindowLevel(self, pubsub_evt):
         diff_wl, diff_ww = pubsub_evt.data
         ww = self.ww + diff_ww
         wl = self.wl + diff_wl
-        ps.Publisher().sendMessage('Set volume window and level text',
+        Publisher.sendMessage('Set volume window and level text',
                                    (ww, wl))
         self.SetWWWL(ww, wl)
         self.ww = ww
@@ -417,7 +461,8 @@ class Volume():
         self.volume_properties.SetSpecularPower(shading['specularPower'])
 
     def SetTypeRaycasting(self):
-        if self.volume_mapper.IsA("vtkFixedPointVolumeRayCastMapper"):
+        if self.volume_mapper.IsA("vtkFixedPointVolumeRayCastMapper") or self.volume_mapper.IsA("vtkGPUVolumeRayCastMapper"):
+
             if self.config.get('MIP', False):
                 self.volume_mapper.SetBlendModeToMaximumIntensity()
             else:
@@ -428,7 +473,9 @@ class Volume():
             else:
                 raycasting_function = vtk.vtkVolumeRayCastCompositeFunction()
                 raycasting_function.SetCompositeMethodToInterpolateFirst()
-            self.volume_mapper.SetVolumeRayCastFunction(raycasting_function)
+
+            if ses.Session().rendering == '0':
+                self.volume_mapper.SetVolumeRayCastFunction(raycasting_function)
 
     def ApplyConvolution(self, imagedata, update_progress = None):
         number_filters = len(self.config['convolutionFilters'])
@@ -439,30 +486,61 @@ class Volume():
                 convolve = vtk.vtkImageConvolve()
                 convolve.SetInput(imagedata)
                 convolve.SetKernel5x5([i/60.0 for i in Kernels[filter]])
-                convolve.AddObserver("ProgressEvent", lambda obj,evt:
-                                     update_progress(convolve, "Rendering..."))
+                convolve.ReleaseDataFlagOn()
+
+                convolve_ref = weakref.ref(convolve)
+                
+                convolve_ref().AddObserver("ProgressEvent", lambda obj,evt:
+                                     update_progress(convolve_ref(), "Rendering..."))
+                convolve.Update()
+                del imagedata
                 imagedata = convolve.GetOutput()
+                del convolve
                 #convolve.GetOutput().ReleaseDataFlagOn()
         return imagedata
 
+    def LoadImage(self):
+        slice_data = slice_.Slice()
+        n_array = slice_data.matrix
+        spacing = slice_data.spacing
+        slice_number = 0
+        orientation = 'AXIAL'
+
+        image = converters.to_vtk(n_array, spacing, slice_number, orientation) 
+        self.image = image
+
     def LoadVolume(self):
         proj = prj.Project()
-        image = proj.imagedata
+        #image = imagedata_utils.to_vtk(n_array, spacing, slice_number, orientation) 
+
+        if not self.loaded_image:
+            self.LoadImage()
+            self.loaded_image = 1
+
+        image = self.image
 
         number_filters = len(self.config['convolutionFilters'])
-        update_progress= vtk_utils.ShowProgress(2 + number_filters)
-
+        
+        if (prj.Project().original_orientation == const.AXIAL):
+            flip_image = True
+        else:
+            flip_image = False
+        
+        #if (flip_image):    
+        update_progress= vtk_utils.ShowProgress(2 + number_filters) 
         # Flip original vtkImageData
         flip = vtk.vtkImageFlip()
         flip.SetInput(image)
         flip.SetFilteredAxis(1)
         flip.FlipAboutOriginOn()
-        flip.AddObserver("ProgressEvent", lambda obj,evt:
-                            update_progress(flip, "Rendering..."))
+        flip.ReleaseDataFlagOn()
+
+        flip_ref = weakref.ref(flip)
+        flip_ref().AddObserver("ProgressEvent", lambda obj,evt:
+                            update_progress(flip_ref(), "Rendering..."))
         flip.Update()
-
         image = flip.GetOutput()
-
+        
         scale = image.GetScalarRange()
         self.scale = scale
 
@@ -470,10 +548,13 @@ class Volume():
         cast.SetInput(image)
         cast.SetShift(abs(scale[0]))
         cast.SetOutputScalarTypeToUnsignedShort()
-        cast.AddObserver("ProgressEvent", lambda obj,evt:
-                            update_progress(cast, "Rendering..."))
+        cast.ReleaseDataFlagOn()
+        cast_ref = weakref.ref(cast)
+        cast_ref().AddObserver("ProgressEvent", lambda obj,evt:
+                            update_progress(cast_ref(), "Rendering..."))
         cast.Update()
         image2 = cast
+
         self.imagedata = image2
         if self.config['advancedCLUT']:
             self.Create16bColorTable(scale)
@@ -497,10 +578,15 @@ class Volume():
             volume_mapper.IntermixIntersectingGeometryOn()
             self.volume_mapper = volume_mapper
         else:
-            volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
-            #volume_mapper.AutoAdjustSampleDistancesOff()
-            self.volume_mapper = volume_mapper
-            volume_mapper.IntermixIntersectingGeometryOn()
+
+            if int(ses.Session().rendering) == 0:
+                volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
+                #volume_mapper.AutoAdjustSampleDistancesOff()
+                self.volume_mapper = volume_mapper
+                volume_mapper.IntermixIntersectingGeometryOn()
+            else:
+                volume_mapper = vtk.vtkGPUVolumeRayCastMapper()
+                self.volume_mapper = volume_mapper
 
         self.SetTypeRaycasting()
         volume_mapper.SetInput(image2)
@@ -544,8 +630,12 @@ class Volume():
 
         colour = self.GetBackgroundColour()
 
-        ps.Publisher().sendMessage('Load volume into viewer',
+        self.exist = 1
+
+        Publisher.sendMessage('Load volume into viewer',
                                     (volume, colour, (self.ww, self.wl)))
+        del flip
+        del cast
 
     def OnEnableTool(self, pubsub_evt):
         tool_name, enable = pubsub_evt.data
@@ -564,16 +654,17 @@ class Volume():
                                       self.volume_mapper)
 
     def CalculateHistogram(self):
-        proj = prj.Project()
-        image = proj.imagedata
-        r = image.GetScalarRange()[1] - image.GetScalarRange()[0]
+        image = self.image
+        r = int(image.GetScalarRange()[1] - image.GetScalarRange()[0])
         accumulate = vtk.vtkImageAccumulate()
         accumulate.SetInput(image)
         accumulate.SetComponentExtent(0, r -1, 0, 0, 0, 0)
         accumulate.SetComponentOrigin(image.GetScalarRange()[0], 0, 0)
+        accumulate.ReleaseDataFlagOn()
         accumulate.Update()
         n_image = numpy_support.vtk_to_numpy(accumulate.GetOutput().GetPointData().GetScalars())
-        ps.Publisher().sendMessage('Load histogram', (n_image,
+        del accumulate
+        Publisher.sendMessage('Load histogram', (n_image,
                                                      image.GetScalarRange()))
 
     def TranslateScale(self, scale, value):
@@ -592,11 +683,11 @@ class CutPlane:
         self.__bind_events()
     
     def __bind_events(self):
-        ps.Publisher().subscribe(self.Reset,
+        Publisher.subscribe(self.Reset,
                                 'Reset Cut Plane')
-        ps.Publisher().subscribe(self.Enable,
+        Publisher.subscribe(self.Enable,
                                 'Enable Cut Plane')
-        ps.Publisher().subscribe(self.Disable,
+        Publisher.subscribe(self.Disable,
                                 'Disable Cut Plane')
             
     def Create(self):
@@ -625,8 +716,8 @@ class CutPlane:
         plane_actor.GetProperty().BackfaceCullingOn()
         plane_actor.GetProperty().SetOpacity(0)
         plane_widget.AddObserver("InteractionEvent", self.Update)
-        ps.Publisher().sendMessage('AppendActor', self.plane_actor)
-        ps.Publisher().sendMessage('Set Widget Interactor', self.plane_widget)
+        Publisher.sendMessage('AppendActor', self.plane_actor)
+        Publisher.sendMessage('Set Widget Interactor', self.plane_widget)
         plane_actor.SetVisibility(1)
         plane_widget.On() 
         self.plane = plane = vtk.vtkPlane()
@@ -649,19 +740,19 @@ class CutPlane:
         self.plane_actor.VisibilityOn()
         self.plane.SetNormal(plane_source.GetNormal())
         self.plane.SetOrigin(plane_source.GetOrigin())
-        ps.Publisher().sendMessage('Render volume viewer', None)
+        Publisher.sendMessage('Render volume viewer', None)
         
     def Enable(self, evt_pubsub=None):
         self.plane_widget.On()
         self.plane_actor.VisibilityOn()
         self.volume_mapper.AddClippingPlane(self.plane)
-        ps.Publisher().sendMessage('Render volume viewer', None)
+        Publisher.sendMessage('Render volume viewer', None)
         
     def Disable(self,evt_pubsub=None):
         self.plane_widget.Off() 
         self.plane_actor.VisibilityOff()
         self.volume_mapper.RemoveClippingPlane(self.plane)
-        ps.Publisher().sendMessage('Render volume viewer', None)
+        Publisher.sendMessage('Render volume viewer', None)
         
     def Reset(self, evt_pubsub=None):
         plane_source = self.plane_source
@@ -673,10 +764,10 @@ class CutPlane:
         self.plane_actor.VisibilityOn() 
         self.plane.SetNormal(self.normal)
         self.plane.SetOrigin(self.origin)
-        ps.Publisher().sendMessage('Render volume viewer', None)  
+        Publisher.sendMessage('Render volume viewer', None)  
         
     def DestroyObjs(self):
-        ps.Publisher().sendMessage('Remove surface actor from viewer', self.plane_actor)
+        Publisher.sendMessage('Remove surface actor from viewer', self.plane_actor)
         self.Disable()
         del self.plane_widget   
         del self.plane_source

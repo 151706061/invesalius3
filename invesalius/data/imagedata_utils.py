@@ -19,9 +19,16 @@
 
 import math
 import os
+import tempfile
+
+import gdcm
+import numpy
 import vtk
 import vtkgdcm
-import wx.lib.pubsub as ps
+from wx.lib.pubsub import pub as Publisher
+
+from scipy.ndimage import shift
+from vtk.util import numpy_support
 
 import constants as const
 from data import vtk_utils
@@ -50,21 +57,19 @@ def ResampleImage3D(imagedata, value):
 
     return resample.GetOutput()
 
-def ResampleImage2D(imagedata, px, py,
+def ResampleImage2D(imagedata, px=None, py=None, resolution_percentage = None,
                         update_progress = None):
     """
     Resample vtkImageData matrix.
     """
+
     extent = imagedata.GetExtent()
     spacing = imagedata.GetSpacing()
+    dimensions = imagedata.GetDimensions()
 
-
-    #if extent[1]==extent[3]:
-    #    f = extent[1]
-    #elif extent[1]==extent[5]:
-    #    f = extent[1]
-    #elif extent[3]==extent[5]:
-    #    f = extent[3]
+    if resolution_percentage:
+        px = math.ceil(dimensions[0] * resolution_percentage)
+        py = math.ceil(dimensions[1] * resolution_percentage)
 
     if abs(extent[1]-extent[3]) < abs(extent[3]-extent[5]):
         f = extent[1]
@@ -92,57 +97,18 @@ def ResampleImage2D(imagedata, px, py,
 
     return resample.GetOutput()
 
-def FixGantryTilt(imagedata, tilt):
+def FixGantryTilt(matrix, spacing, tilt):
     """
     Fix gantry tilt given a vtkImageData and the tilt value. Return new
     vtkImageData.
     """
+    angle = numpy.radians(tilt)
+    spacing = spacing[0], spacing[1], spacing[2]
+    gntan = math.tan(angle)
 
-    # Retrieve data from original imagedata
-    extent = [int(value) for value in imagedata.GetExtent()]
-    origin = imagedata.GetOrigin()
-    spacing = [float(value) for value in imagedata.GetSpacing()]
-
-    n_slices = int(extent[5])
-    new_zspacing = math.cos(tilt*(math.acos(-1.0)/180.0)) * spacing[2] #zspacing
-    translate_coef = math.tan(tilt*math.pi/180.0)*new_zspacing*(n_slices-1)
-
-    # Class responsible for translating data
-    reslice = vtk.vtkImageReslice()
-    reslice.SetInput(imagedata)
-    reslice.SetInterpolationModeToLinear()
-    # Translation will create new pixels. Let's set new pixels' colour to black.
-    reslice.SetBackgroundLevel(imagedata.GetScalarRange()[0])
-
-    # Class responsible for append translated data
-    append = vtk.vtkImageAppend()
-    append.SetAppendAxis(2)
-
-    # Translate and append each slice
-    for i in xrange(n_slices+1):
-        slice_imagedata = vtk.vtkImageData()
-        value = math.tan(tilt*math.pi/180.0) * new_zspacing * i
-        new_origin1 = origin[1] + value - translate_coef
-        # Translate data
-        reslice.SetOutputOrigin(origin[0], new_origin1, origin[2])
-        reslice.SetOutputExtent(extent[0], extent[1], extent[2], extent[3], i,i)
-        reslice.Update()
-        # Append data
-        slice_imagedata.DeepCopy(reslice.GetOutput())
-        slice_imagedata.UpdateInformation()
-
-        append.AddInput(slice_imagedata)
-
-    append.Update()
-
-    # Final imagedata
-    imagedata = vtk.vtkImageData()
-    imagedata.DeepCopy(append.GetOutput())
-    imagedata.SetSpacing(spacing[0], spacing[1], new_zspacing)
-    imagedata.SetExtent(extent)
-    imagedata.UpdateInformation()
-
-    return imagedata
+    for n, slice_ in enumerate(matrix):
+        offset = gntan * n * spacing[2]
+        matrix[n] = shift(slice_, (-offset/spacing[1], 0), cval=matrix.min())
 
 
 def BuildEditedImage(imagedata, points):
@@ -151,19 +117,55 @@ def BuildEditedImage(imagedata, points):
     points in the editor, it is necessary to generate the
     vtkPolyData via vtkContourFilter
     """
+    init_values = None
     for point in points:
         x, y, z = point
         colour = points[point]
         imagedata.SetScalarComponentFromDouble(x, y, z, 0, colour)
         imagedata.Update()
 
+        if not(init_values):
+                xi = x
+                xf = x
+                yi = y
+                yf = y
+                zi = z
+                zf = z
+                init_values = 1
+
+        if (xi > x):
+            xi = x
+        elif(xf < x):
+            xf = x
+
+        if (yi > y):
+            yi = y
+        elif(yf < y):
+            yf = y
+
+        if (zi > z):
+            zi = z
+        elif(zf < z):
+            zf = z
+
+    clip = vtk.vtkImageClip()
+    clip.SetInput(imagedata)
+    clip.SetOutputWholeExtent(xi, xf, yi, yf, zi, zf)
+    clip.Update()
+
     gauss = vtk.vtkImageGaussianSmooth()
-    gauss.SetInput(imagedata)
+    gauss.SetInput(clip.GetOutput())
     gauss.SetRadiusFactor(0.6)
     gauss.Update()
 
-    return gauss.GetOutput()
-    #return imagedata
+    app = vtk.vtkImageAppend()
+    app.PreserveExtentsOn()
+    app.SetAppendAxis(2)
+    app.SetInput(0, imagedata)
+    app.SetInput(1, gauss.GetOutput())
+    app.Update()
+
+    return app.GetOutput()
 
 
 def Export(imagedata, filename, bin=False):
@@ -173,8 +175,8 @@ def Export(imagedata, filename, bin=False):
         writer.SetDataModeToBinary()
     else:
         writer.SetDataModeToAscii()
-    writer.SetInput(imagedata)
-    writer.Write()
+    #writer.SetInput(imagedata)
+    #writer.Write()
 
 def Import(filename):
     reader = vtk.vtkXMLImageDataReader()
@@ -319,7 +321,7 @@ def CreateImageData(filelist, zspacing, xyspacing,size,
 class ImageCreator:
     def __init__(self):
         self.running = True
-        ps.Publisher().subscribe(self.CancelImageDataLoad, "Cancel DICOM load")
+        Publisher.subscribe(self.CancelImageDataLoad, "Cancel DICOM load")
 
     def CancelImageDataLoad(self, evt_pusub):
         utils.debug("Canceling")
@@ -413,3 +415,184 @@ class ImageCreator:
         imagedata.Update()
 
         return imagedata
+
+def dcm2memmap(files, slice_size, orientation, resolution_percentage):
+    """
+    From a list of dicom files it creates memmap file in the temp folder and
+    returns it and its related filename.
+    """
+    message = _("Generating multiplanar visualization...")
+    update_progress= vtk_utils.ShowProgress(len(files) - 1, dialog_type = "ProgressDialog")
+
+    temp_file = tempfile.mktemp()
+
+    if orientation == 'SAGITTAL':
+        if resolution_percentage == 1.0:
+            shape = slice_size[0], slice_size[1], len(files)
+        else:
+            shape = math.ceil(slice_size[0]*resolution_percentage),\
+                    math.ceil(slice_size[1]*resolution_percentage), len(files)
+
+    elif orientation == 'CORONAL':
+        if resolution_percentage == 1.0:
+            shape = slice_size[1], len(files), slice_size[0]
+        else:
+            shape = math.ceil(slice_size[1]*resolution_percentage), len(files),\
+                                        math.ceil(slice_size[0]*resolution_percentage)
+    else:
+        if resolution_percentage == 1.0:
+            shape = len(files), slice_size[1], slice_size[0]
+        else:
+            shape = len(files), math.ceil(slice_size[1]*resolution_percentage),\
+                                        math.ceil(slice_size[0]*resolution_percentage)
+
+    matrix = numpy.memmap(temp_file, mode='w+', dtype='int16', shape=shape)
+    dcm_reader = vtkgdcm.vtkGDCMImageReader()
+    cont = 0
+    max_scalar = None
+    min_scalar = None
+
+    for n, f in enumerate(files):
+        dcm_reader.SetFileName(f)
+        dcm_reader.Update()
+        image = dcm_reader.GetOutput()
+
+        if resolution_percentage != 1.0:
+            image_resized = ResampleImage2D(image, px=None, py=None,\
+                                resolution_percentage = resolution_percentage, update_progress = None)
+
+            image = image_resized
+            print ">>>>>>>>>", image.GetDimensions()
+
+        min_aux, max_aux = image.GetScalarRange()
+        if min_scalar is None or min_aux < min_scalar:
+            min_scalar = min_aux
+
+        if max_scalar is None or max_aux > max_scalar:
+            max_scalar = max_aux
+
+        array = numpy_support.vtk_to_numpy(image.GetPointData().GetScalars())
+        if orientation == 'CORONAL':
+            array.shape = matrix.shape[0], matrix.shape[2]
+            matrix[:, n, :] = array
+        elif orientation == 'SAGITTAL':
+            array.shape = matrix.shape[0], matrix.shape[1]
+            # TODO: Verify if it's necessary to add the slices swapped only in
+            # sagittal rmi or only in # Rasiane's case or is necessary in all
+            # sagittal cases.
+            matrix[:, :, n] = array
+        else:
+            print array.shape, matrix.shape
+            array.shape = matrix.shape[1], matrix.shape[2]
+            matrix[n] = array
+        update_progress(cont,message)
+        cont += 1
+
+    matrix.flush()
+    scalar_range = min_scalar, max_scalar
+
+    return matrix, scalar_range, temp_file
+
+def analyze2mmap(analyze):
+    data = analyze.get_data()
+    header = analyze.get_header()
+    temp_file = tempfile.mktemp()
+
+    # Sagital
+    if header['orient'] == 2:
+        print "Orientation Sagital"
+        shape = tuple([data.shape[i] for i in (1, 2, 0)])
+        matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+        for n, slice in enumerate(data):
+            matrix[:,:, n] = slice
+
+    # Coronal
+    elif header['orient'] == 1:
+        print "Orientation coronal"
+        shape = tuple([data.shape[i] for i in (1, 0, 2)])
+        matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+        for n, slice in enumerate(data):
+            matrix[:,n,:] = slice
+
+    # AXIAL
+    elif header['orient'] == 0:
+        print "no orientation"
+        shape = tuple([data.shape[i] for i in (0, 1, 2)])
+        matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+        for n, slice in enumerate(data):
+            matrix[n] = slice
+
+    else:
+        print "Orientation Sagital"
+        shape = tuple([data.shape[i] for i in (1, 2, 0)])
+        matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+        for n, slice in enumerate(data):
+            matrix[:,:, n] = slice
+
+    matrix.flush()
+    return matrix, temp_file
+
+def nifti2mmap(nifti):
+    data = nifti.get_data()
+    header = nifti.get_header()
+    temp_file = tempfile.mktemp()
+
+#     # Sagital
+#     if header['orient'] == 2:
+#         print "Orientation Sagital"
+#         shape = tuple([data.shape[i] for i in (1, 2, 0)])
+#         matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+#         for n, slice in enumerate(data):
+#             matrix[:,:, n] = slice
+# 
+#     # Coronal
+#     elif header['orient'] == 1:
+#         print "Orientation coronal"
+#         shape = tuple([data.shape[i] for i in (1, 0, 2)])
+#         matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+#         for n, slice in enumerate(data):
+#             matrix[:,n,:] = slice
+# 
+#     # AXIAL
+#     elif header['orient'] == 0:
+#         print "no orientation"
+#         shape = tuple([data.shape[i] for i in (0, 1, 2)])
+#         matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+#         for n, slice in enumerate(data):
+#             matrix[n] = slice
+# 
+#     else:
+#         print "Orientation Sagital"
+#         shape = tuple([data.shape[i] for i in (1, 2, 0)])
+#         matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+#         for n, slice in enumerate(data):
+#             matrix[:,:, n] = slice
+
+    print " Orientation Axial"
+    shape = tuple([data.shape[i] for i in (0, 1, 2)])
+    matrix = numpy.memmap(temp_file, mode='w+', dtype=data.dtype, shape=shape)
+    data = imgnormalize(data)
+    dataswap = numpy.swapaxes(data, 2, 0)
+    dataswap[:] = dataswap[:, ::-1]
+    for n, slice in enumerate(dataswap):
+        print 'slice: ', slice
+        matrix[n] = slice
+    
+    matrix.flush()
+    return matrix, temp_file
+
+def imgnormalize(f, range=[0,255]):
+    f = numpy.asarray(f)
+    range = numpy.asarray(range)
+    faux = numpy.ravel(f).astype(float)
+    minimum = numpy.min(faux)
+    maximum = numpy.max(faux)
+    lower = range[0]
+    upper = range[1]
+    if minimum == maximum:
+        g = numpy.ones(f.shape)*(upper + lower) / 2.
+    else:
+        g = (faux-minimum)*(upper-lower) / (maximum-minimum) + lower
+    g = numpy.reshape(g, f.shape)
+    g = g.astype(f.dtype)
+    return g

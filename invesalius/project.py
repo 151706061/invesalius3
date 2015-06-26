@@ -17,25 +17,23 @@
 #    detalhes.
 #--------------------------------------------------------------------------
 
+import datetime
 import glob
 import os
 import plistlib
 import shutil
-import stat
 import tarfile
 import tempfile
 
 import wx
-import wx.lib.pubsub as ps
+from wx.lib.pubsub import pub as Publisher
 import vtk
 
 import constants as const
-import data.imagedata_utils as iu
 import data.mask as msk
 import data.polydata_utils as pu
 import data.surface as srf
 from presets import Presets
-from reader import dicom
 from utils import Singleton, debug
 import version
 
@@ -47,27 +45,20 @@ class Project(object):
     def __init__(self):
         # Patient/ acquistion information
         self.name = ''
-        self.dicom_sample = ''
         self.modality = ''
         self.original_orientation = ''
-        self.min_threshold = ''
-        self.max_threshold = ''
         self.window = ''
         self.level = ''
 
-        # Original imagedata (shouldn't be changed)
-        self.imagedata = ''
-
         # Masks (vtkImageData)
         self.mask_dict = {}
-        self.last_mask_index = 0
 
         # Surfaces are (vtkPolyData)
         self.surface_dict = {}
         self.last_surface_index = -1
 
-        # TODO: Future
-        self.measure_dict = {}
+        # Measurements
+        self.measurement_dict = {}
 
         # TODO: Future ++
         self.annotation_dict = {}
@@ -109,7 +100,6 @@ class Project(object):
         output
             @ index: index of item that was inserted
         """
-        self.last_mask_index = mask.index
         index = len(self.mask_dict)
         self.mask_dict[index] = mask
         return index
@@ -121,13 +111,14 @@ class Project(object):
                 new_dict[i] = self.mask_dict[i]
             if i > index:
                 new_dict[i-1] = self.mask_dict[i]
+                new_dict[i-1].index = i-1
         self.mask_dict = new_dict
 
     def GetMask(self, index):
         return self.mask_dict[index]
 
     def AddSurface(self, surface):
-        self.last_surface_index = surface.index
+        #self.last_surface_index = surface.index
         index = len(self.surface_dict)
         self.surface_dict[index] = surface
         return index
@@ -143,7 +134,30 @@ class Project(object):
                 new_dict[i] = self.surface_dict[i]
             if i > index:
                 new_dict[i-1] = self.surface_dict[i]
+                new_dict[i-1].index = i-1
         self.surface_dict = new_dict
+
+
+    def AddMeasurement(self, measurement):
+        index = len(self.measurement_dict)
+        measurement.index = index
+        self.measurement_dict[index] = measurement
+        return index
+
+    def ChangeMeasurement(self, measurement):
+        index = measurement.index
+        self.measurement_dict[index] = measurement
+
+    def RemoveMeasurement(self, index):
+        new_dict = {}
+        for i in self.measurement_dict:
+            if i < index:
+                new_dict[i] = self.measurement_dict[i]
+            if i > index:
+                new_dict[i-1] = self.measurement_dict[i]
+                new_dict[i-1].index = i-1
+        self.measurement_dict = new_dict
+
 
     def SetAcquisitionModality(self, type_=None):
         if type_ is None:
@@ -160,56 +174,102 @@ class Project(object):
     def SetRaycastPreset(self, label):
         path = os.path.join(RAYCASTING_PRESETS_DIRECTORY, label + '.plist')
         preset = plistlib.readPlist(path)
-        ps.Publisher.sendMessage('Set raycasting preset', preset)
+        Publisher.sendMessage('Set raycasting preset', preset)
+
+    def GetMeasuresDict(self):
+        measures = {}
+        d = self.measurement_dict
+        for i in d:
+            m = d[i]
+            item = {}
+            item["index"] = m.index
+            item["name"] = m.name
+            item["colour"] = m.colour
+            item["value"] = m.value
+            item["location"] = m.location
+            item["type"] = m.type
+            item["slice_number"] = m.slice_number
+            item["points"] = m.points
+            item["visible"] = m.is_shown
+            measures[str(m.index)] = item
+        return measures
 
     def SavePlistProject(self, dir_, filename):
+        dir_temp = tempfile.mkdtemp()
+        filename_tmp = os.path.join(dir_temp, 'matrix.dat')
+        filelist = {}
 
-        # Some filenames have non-ascii characters and encoded in a strange
-        # encoding, in that cases a UnicodeEncodeError is raised. To avoid
-        # that we encode in utf-8.
-        filename = filename.encode('utf-8')
-        dir_temp = tempfile.mkdtemp(filename)
-        filename_tmp = os.path.join(dir_temp, filename)
+        project = {
+                   # Format info
+                   "format_version": 1,
+                   "invesalius_version": const.INVESALIUS_VERSION,
+                   "date": datetime.datetime.now().isoformat(),
 
-        project = {}
+                   # case info
+                   "name": self.name, # patient's name
+                   "modality": self.modality, # CT, RMI, ...
+                   "orientation": self.original_orientation,
+                   "window_width": self.window,
+                   "window_level": self.level,
+                   "scalar_range": self.threshold_range,
+                   "spacing": self.spacing,
+                  }
 
-        for key in self.__dict__:
-            if getattr(self.__dict__[key], 'SavePlist', None):
-                project[key] = {'#plist':
-                                self.__dict__[key].SavePlist(filename_tmp).decode('utf-8')}
-            elif key == 'dicom_sample':
-                sample_path = os.path.join(dir_temp, 'sample.dcm')
-                shutil.copy(self.dicom_sample.parser.filename,sample_path)
-                os.chmod(sample_path, stat.S_IREAD|stat.S_IWRITE)
-                
-                project[key] = 'sample.dcm'
-            else:
-                project[key] = self.__dict__[key]
+        # Saving the matrix containing the slices
+        matrix = {'filename': u'matrix.dat',
+                  'shape': self.matrix_shape,
+                  'dtype': self.matrix_dtype,
+                 }
+        project['matrix'] = matrix
+        filelist[self.matrix_filename] = 'matrix.dat'
+        #shutil.copyfile(self.matrix_filename, filename_tmp)
 
+        # Saving the masks
         masks = {}
         for index in self.mask_dict:
-            masks[str(index)] = {'#mask':\
-                                 self.mask_dict[index].SavePlist(filename_tmp).decode('utf-8')}
+            masks[str(index)] = self.mask_dict[index].SavePlist(dir_temp,
+                                                                filelist)
+        project['masks'] = masks
 
+        # Saving the surfaces
         surfaces = {}
         for index in self.surface_dict:
-            surfaces[str(index)] = {'#surface':\
-                                    self.surface_dict[index].SavePlist(filename_tmp)}
+            surfaces[str(index)] = self.surface_dict[index].SavePlist(dir_temp,
+                                                                     filelist)
+        project['surfaces'] = surfaces
 
-        project['surface_dict'] = surfaces
-        project['mask_dict'] = masks
-        img_file = '%s_%s.vti' % (filename_tmp, 'imagedata')
-        iu.Export(self.imagedata, img_file, bin=True)
-        project['imagedata'] = {'$vti':os.path.split(img_file)[1].decode('utf-8')}
+        # Saving the measurements
+        measurements = self.GetMeasuresDict()
+        measurements_filename = 'measurements.plist'
+        temp_mplist = tempfile.mktemp() 
+        plistlib.writePlist(measurements, 
+                            temp_mplist)
+        filelist[temp_mplist] = measurements_filename
+        project['measurements'] = measurements_filename
 
-        plistlib.writePlist(project, filename_tmp + '.plist')
+        # Saving the annotations (empty in this version)
+        project['annotations'] = {}
 
+        # Saving the main plist
+        temp_plist = tempfile.mktemp()
+        plistlib.writePlist(project, temp_plist)
+        filelist[temp_plist] = 'main.plist'
+
+        # Compressing and generating the .inv3 file
         path = os.path.join(dir_,filename)
-        Compress(dir_temp, path)#os.path.join("~/Desktop/","teste.inv3"))
+        Compress(dir_temp, path, filelist)
+
+        # Removing the temp folder.
         shutil.rmtree(dir_temp)
 
+        for f in filelist:
+            if filelist[f].endswith('.plist'):
+                print f
+                os.remove(f)
+
     def OpenPlistProject(self, filename):
-        
+        import data.measures as ms
+ 
         if not const.VTK_WARNING:
             log_path = os.path.join(const.LOG_FOLDER, 'vtkoutput.txt')
             fow = vtk.vtkFileOutputWindow()
@@ -217,65 +277,92 @@ class Project(object):
             ow = vtk.vtkOutputWindow()
             ow.SetInstance(fow)
             
-        filelist = Extract(filename, tempfile.gettempdir())
-        main_plist = min(filter(lambda x: x.endswith('.plist'), filelist),
-                         key=lambda x: len(x))
-        project = plistlib.readPlist(main_plist)
+        filelist = Extract(filename, tempfile.mkdtemp())
         dirpath = os.path.abspath(os.path.split(filelist[0])[0])
 
-        for key in project:
-            if key == 'imagedata':
-                filepath = os.path.split(project[key]["$vti"])[-1]
-                path = os.path.join(dirpath, filepath)
-                self.imagedata = iu.Import(path)
-            elif key == 'presets':
-                filepath = os.path.split(project[key]["#plist"])[-1]
-                path = os.path.join(dirpath, filepath)
-                p = Presets()
-                p.OpenPlist(path)
-                self.presets = p
-            elif key == 'dicom_sample':
-                path = os.path.join(dirpath, project[key])
-                p = dicom.Parser()
-                p.SetFileName(path)
-                d = dicom.Dicom()
-                d.SetParser(p)
-                self.dicom_sample = d
+        # Opening the main file from invesalius 3 project
+        main_plist =  os.path.join(dirpath ,'main.plist')
+        project = plistlib.readPlist(main_plist)
 
-            elif key == 'mask_dict':
-                self.mask_dict = {}
-                for mask in project[key]:
-                    filepath = os.path.split(project[key][mask]["#mask"])[-1]
-                    path = os.path.join(dirpath, filepath)
-                    m = msk.Mask()
-                    m.OpenPList(path)
-                    self.mask_dict[m.index] = m
-            elif key == 'surface_dict':
-                self.surface_dict = {}
-                for surface in project[key]:
-                    filepath = os.path.split(project[key][surface]["#surface"])[-1]
-                    path = os.path.join(dirpath, filepath)
-                    s = srf.Surface()
-                    s.OpenPList(path)
-                    self.surface_dict[s.index] = s
-            else: 
-                setattr(self, key, project[key])
+        # case info
+        self.name = project["name"]
+        self.modality = project["modality"]
+        self.original_orientation = project["orientation"]
+        self.window = project["window_width"]
+        self.level = project["window_level"]
+        self.threshold_range = project["scalar_range"]
+        self.spacing = project["spacing"]
 
+        # Opening the matrix containing the slices
+        filepath = os.path.join(dirpath, project["matrix"]["filename"])
+        self.matrix_filename = filepath
+        self.matrix_shape = project["matrix"]['shape']
+        self.matrix_dtype = project["matrix"]['dtype']
 
-def Compress(folder, filename):
+        # Opening the masks
+        self.mask_dict = {}
+        for index in project["masks"]:
+            filename = project["masks"][index]
+            filepath = os.path.join(dirpath, filename)
+            m = msk.Mask()
+            m.OpenPList(filepath)
+            self.mask_dict[m.index] = m
+
+        # Opening the surfaces
+        self.surface_dict = {}
+        for index in project["surfaces"]:
+            filename = project["surfaces"][index]
+            filepath = os.path.join(dirpath, filename)
+            s = srf.Surface(int(index))
+            s.OpenPList(filepath)
+            self.surface_dict[s.index] = s
+
+        # Opening the measurements
+        self.measurement_dict = {}
+        measurements = plistlib.readPlist(os.path.join(dirpath,
+                                                       project["measurements"]))
+        for index in measurements:
+            measure = ms.Measurement()
+            measure.Load(measurements[index])
+            self.measurement_dict[int(index)] = measure
+
+def Compress(folder, filename, filelist):
     tmpdir, tmpdir_ = os.path.split(folder)
     current_dir = os.path.abspath(".")
-    os.chdir(tmpdir)
-    file_list = glob.glob(os.path.join(tmpdir_,"*"))
-    
-    tar = tarfile.open(tmpdir_ + ".inv3", "w:gz")
-    for name in file_list:
-        tar.add(name)
+    #os.chdir(tmpdir)
+    #file_list = glob.glob(os.path.join(tmpdir_,"*"))
+    tar_filename = tmpdir_ + ".inv3"
+    tar = tarfile.open(filename.encode(wx.GetDefaultPyEncoding()), "w:gz")
+    for name in filelist:
+        tar.add(name, arcname=os.path.join(tmpdir_, filelist[name]))
     tar.close()
-    shutil.move(tmpdir_+ ".inv3", filename)
-    os.chdir(current_dir)
-    
+    #shutil.move(tmpdir_+ ".inv3", filename)
+    #os.chdir(current_dir)
+
 def Extract(filename, folder):
+    tar = tarfile.open(filename, "r:gz")
+    idir = os.path.split(tar.getnames()[0])[0]
+    os.mkdir(os.path.join(folder, idir.decode('utf8')))
+    filelist = []
+    for t in tar.getmembers():
+        fsrc = tar.extractfile(t)
+
+        fname = os.path.join(folder, t.name.decode('utf-8'))
+        fdst = file(fname, 'wb')
+
+        shutil.copyfileobj(fsrc, fdst)
+
+        filelist.append(fname)
+        fsrc.close()
+        fdst.close()
+        del fsrc
+        del fdst
+    tar.close()
+    print filelist
+    return filelist
+
+    
+def Extract_(filename, folder):
     tar = tarfile.open(filename, "r:gz")
     #tar.list(verbose=True)
     tar.extractall(folder)
