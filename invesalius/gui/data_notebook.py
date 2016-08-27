@@ -364,6 +364,7 @@ class MasksListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
 
         Publisher.subscribe(self.OnChangeCurrentMask, 'Change mask selected')
         Publisher.subscribe(self.__hide_current_mask, 'Hide current mask')
+        Publisher.subscribe(self.__show_current_mask, 'Show current mask')
         Publisher.subscribe(self.OnCloseProject, 'Close project data')
 
     def OnKeyEvent(self, event):
@@ -435,6 +436,9 @@ class MasksListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
     def __hide_current_mask(self, pubsub_evt):
         self.SetItemImage(self.current_index, 0)
 
+    def __show_current_mask(self, pubsub_evt):
+        self.SetItemImage(self.current_index, 1)
+
     def __init_columns(self):
 
         self.InsertColumn(0, "", wx.LIST_FORMAT_CENTER)
@@ -496,7 +500,10 @@ class MasksListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
 
         wx_image = wx.EmptyImage(new_image.size[0],
                                  new_image.size[1])
-        wx_image.SetData(new_image.tostring())
+        try:
+            wx_image.SetData(new_image.tostring())
+        except Exception:
+            wx_image.SetData(new_image.tobytes())
         return wx.BitmapFromImage(wx_image.Scale(16, 16))
 
     def InsertNewItem(self, index=0, label=_("Mask"), threshold="(1000, 4500)",
@@ -505,11 +512,11 @@ class MasksListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
         self.SetStringItem(index, 1, label,
                            imageId=self.mask_list_index[index])
         self.SetStringItem(index, 2, threshold)
-        self.SetItemImage(index, 1)
-        for key in self.mask_list_index.keys():
-            if key != index:
-                self.SetItemImage(key, 0)
-        self.current_index = index
+        #  self.SetItemImage(index, 1)
+        #  for key in self.mask_list_index.keys():
+            #  if key != index:
+                #  self.SetItemImage(key, 0)
+        #  self.current_index = index
 
     def AddMask(self, pubsub_evt):
         index, mask_name, threshold_range, colour = pubsub_evt.data
@@ -762,12 +769,14 @@ class SurfacesListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
         self.InsertColumn(0, "", wx.LIST_FORMAT_CENTER)
         self.InsertColumn(1, _("Name"))
         self.InsertColumn(2, _(u"Volume (mm³)"))
-        self.InsertColumn(3, _("Transparency"), wx.LIST_FORMAT_RIGHT)
+        self.InsertColumn(3, _(u"Area (mm²)"))
+        self.InsertColumn(4, _("Transparency"), wx.LIST_FORMAT_RIGHT)
 
         self.SetColumnWidth(0, 25)
         self.SetColumnWidth(1, 85)
         self.SetColumnWidth(2, 85)
-        self.SetColumnWidth(3, 80)
+        self.SetColumnWidth(3, 85)
+        self.SetColumnWidth(4, 80)
 
     def __init_image_list(self):
         self.imagelist = wx.ImageList(16, 16)
@@ -827,7 +836,8 @@ class SurfacesListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
         name = pubsub_evt.data[1]
         colour = pubsub_evt.data[2]
         volume = "%.3f"%pubsub_evt.data[3]
-        transparency = "%d%%"%(int(100*pubsub_evt.data[4]))
+        area = "%.3f"%pubsub_evt.data[4]
+        transparency = "%d%%"%(int(100*pubsub_evt.data[5]))
 
         if index not in self.surface_list_index:
             image = self.CreateColourBitmap(colour)
@@ -837,25 +847,29 @@ class SurfacesListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
             self.surface_list_index[index] = image_index
 
             if (index in index_list) and index_list:
-                self.UpdateItemInfo(index, name, volume, transparency, colour)
+                self.UpdateItemInfo(index, name, volume, area, transparency, colour)
             else:
-                self.InsertNewItem(index, name, volume, transparency, colour)
+                self.InsertNewItem(index, name, volume, area, transparency, colour)
+        else:
+            self.UpdateItemInfo(index, name, volume, area, transparency, colour)
 
     def InsertNewItem(self, index=0, label="Surface 1", volume="0 mm3",
-                      transparency="0%%", colour=None):
+                      area="0 mm2", transparency="0%%", colour=None):
         self.InsertStringItem(index, "")
         self.SetStringItem(index, 1, label,
                             imageId = self.surface_list_index[index])
         self.SetStringItem(index, 2, volume)
-        self.SetStringItem(index, 3, transparency)
+        self.SetStringItem(index, 3, area)
+        self.SetStringItem(index, 4, transparency)
         self.SetItemImage(index, 1)
 
     def UpdateItemInfo(self, index=0, label="Surface 1", volume="0 mm3",
-                      transparency="0%%", colour=None):
+                       area="0 mm2", transparency="0%%", colour=None):
         self.SetStringItem(index, 1, label,
                             imageId = self.surface_list_index[index])
         self.SetStringItem(index, 2, volume)
-        self.SetStringItem(index, 3, transparency)
+        self.SetStringItem(index, 3, area)
+        self.SetStringItem(index, 4, transparency)
         self.SetItemImage(index, 1)
 
     def CreateColourBitmap(self, colour):
@@ -873,7 +887,11 @@ class SurfacesListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
 
         wx_image = wx.EmptyImage(new_image.size[0],
                                  new_image.size[1])
-        wx_image.SetData(new_image.tostring())
+        try:
+            wx_image.SetData(new_image.tostring())
+        except Exception:
+            wx_image.SetData(new_image.tobytes())
+
         return wx.BitmapFromImage(wx_image.Scale(16, 16))
 
     def EditSurfaceTransparency(self, pubsub_evt):
@@ -882,7 +900,7 @@ class SurfacesListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
         index and value.
         """
         index, value = pubsub_evt.data
-        self.SetStringItem(index, 3, "%d%%"%(int(value*100)))
+        self.SetStringItem(index, 4, "%d%%"%(int(value*100)))
 
     def EditSurfaceColour(self, pubsub_evt):
         """
@@ -925,6 +943,7 @@ class MeasuresListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
         Publisher.subscribe(self.OnShowSingle, 'Show single measurement')
         Publisher.subscribe(self.OnShowMultiple, 'Show multiple measurements')
         Publisher.subscribe(self.OnLoadData, 'Load measurement dict')
+        Publisher.subscribe(self.OnRemoveGUIMeasure, 'Remove GUI measurement')
 
     def __bind_events_wx(self):
         self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.OnItemActivated)
@@ -940,6 +959,19 @@ class MeasuresListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
             self.RemoveMeasurements()
         elif (keycode == wx.WXK_DELETE):
             self.RemoveMeasurements()
+
+    def OnRemoveGUIMeasure(self, pubsub_evt):
+        idx = pubsub_evt.data
+        self.DeleteItem(idx)
+
+        old_dict = self._list_index
+        new_dict = {}
+        j = 0
+        for i in old_dict:
+            if i != idx:
+                new_dict[j] = old_dict[i]
+                j+=1
+        self._list_index = new_dict
 
     def RemoveMeasurements(self):
         """
@@ -1087,7 +1119,7 @@ class MeasuresListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
                 value = (u"%.2f°") % m.value
             self.InsertNewItem(m.index, m.name, colour, location, type, value)
 
-            if not m.is_shown:
+            if not m.visible:
                 self.SetItemImage(i, False)
 
     def AddItem_(self, pubsub_evt):
@@ -1109,6 +1141,8 @@ class MeasuresListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
                 self.UpdateItemInfo(index, name, colour, location, type_, value)
             else:
                 self.InsertNewItem(index, name, colour, location, type_, value)
+        else:
+            self.UpdateItemInfo(index, name, colour, location, type_, value)
 
 
 
@@ -1124,7 +1158,7 @@ class MeasuresListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
         self.Refresh()
 
     def UpdateItemInfo(self, index=0, label="Measurement 1", colour=None,
-                      type_="LINEAR", location="SURFACE", value="0 mm"):
+                      location="SURFACE", type_="LINEAR", value="0 mm"):
         self.SetStringItem(index, 1, label,
                             imageId = self._list_index[index])
         self.SetStringItem(index, 2, location)
@@ -1148,7 +1182,10 @@ class MeasuresListCtrlPanel(wx.ListCtrl, listmix.TextEditMixin):
 
         wx_image = wx.EmptyImage(new_image.size[0],
                                  new_image.size[1])
-        wx_image.SetData(new_image.tostring())
+        try:
+            wx_image.SetData(new_image.tostring())
+        except:
+            wx_image.SetData(new_image.tobytes())
         return wx.BitmapFromImage(wx_image.Scale(16, 16))
 
     def EditItemColour(self, pubsub_evt):

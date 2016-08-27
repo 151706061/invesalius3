@@ -232,7 +232,7 @@ class Viewer(wx.Panel):
         self.ball_reference.SetRadius(r)
 
         mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInput(self.ball_reference.GetOutput())
+        mapper.SetInputConnection(self.ball_reference.GetOutputPort())
 
         p = vtk.vtkProperty()
         p.SetColor(1, 0, 0)
@@ -318,6 +318,7 @@ class Viewer(wx.Panel):
                 image = vtk.vtkRenderLargeImage()
                 image.SetInput(self.ren)
                 image.SetMagnification(1)
+                image.Update()
 
                 image = image.GetOutput()
 
@@ -333,12 +334,12 @@ class Viewer(wx.Panel):
                 elif (filetype == const.FILETYPE_TIF):
                     writer = vtk.vtkTIFFWriter()
                     filename = "%s.tif"%filename.strip(".tif")
-                
-                writer.SetInput(image)
+
+                writer.SetInputData(image)
                 writer.SetFileName(filename)
                 writer.Write()
         Publisher.sendMessage('End busy cursor')
- 
+
     def OnCloseProject(self, pubsub_evt):
         if self.raycasting_volume:
             self.raycasting_volume = False

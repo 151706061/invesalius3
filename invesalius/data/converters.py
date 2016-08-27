@@ -22,6 +22,10 @@ import vtk
 from vtk.util import numpy_support
 
 def to_vtk(n_array, spacing, slice_number, orientation):
+
+    if orientation == "SAGITTAL":
+        orientation = "SAGITAL"
+
     try:
         dz, dy, dx = n_array.shape
     except ValueError:
@@ -43,16 +47,38 @@ def to_vtk(n_array, spacing, slice_number, orientation):
     image = vtk.vtkImageData()
     image.SetOrigin(0, 0, 0)
     image.SetSpacing(spacing)
-    image.SetNumberOfScalarComponents(1)
     image.SetDimensions(dx, dy, dz)
+    # SetNumberOfScalarComponents and SetScalrType were replaced by
+    # AllocateScalars
+    #  image.SetNumberOfScalarComponents(1)
+    #  image.SetScalarType(numpy_support.get_vtk_array_type(n_array.dtype))
+    image.AllocateScalars(numpy_support.get_vtk_array_type(n_array.dtype), 1)
     image.SetExtent(extent)
-    image.SetScalarType(numpy_support.get_vtk_array_type(n_array.dtype))
-    image.AllocateScalars()
     image.GetPointData().SetScalars(v_image)
-    image.Update()
 
     image_copy = vtk.vtkImageData()
     image_copy.DeepCopy(image)
-    image_copy.Update()
 
     return image_copy
+
+
+def np_rgba_to_vtk(n_array, spacing=(1.0, 1.0, 1.0)):
+    dy, dx, dc = n_array.shape
+    v_image = numpy_support.numpy_to_vtk(n_array.reshape(dy*dx, dc))
+
+    extent = (0, dx -1, 0, dy -1, 0, 0)
+
+    # Generating the vtkImageData
+    image = vtk.vtkImageData()
+    image.SetOrigin(0, 0, 0)
+    image.SetSpacing(spacing)
+    image.SetDimensions(dx, dy, 1)
+    # SetNumberOfScalarComponents and SetScalrType were replaced by
+    # AllocateScalars
+    #  image.SetNumberOfScalarComponents(1)
+    #  image.SetScalarType(numpy_support.get_vtk_array_type(n_array.dtype))
+    image.AllocateScalars(numpy_support.get_vtk_array_type(n_array.dtype), dc)
+    image.SetExtent(extent)
+    image.GetPointData().SetScalars(v_image)
+
+    return image

@@ -42,6 +42,8 @@ try:
 except ImportError:
     import data.ca_smoothing as ca_smoothing
 
+# TODO: Verificar ReleaseDataFlagOn and SetSource 
+
 class Surface():
     """
     Represent both vtkPolyData and associated properties.
@@ -57,7 +59,8 @@ class Surface():
         self.polydata = ''
         self.colour = ''
         self.transparency = const.SURFACE_TRANSPARENCY
-        self.volume = 0
+        self.volume = 0.0
+        self.area = 0.0
         self.is_shown = 1
         if not name:
             self.name = const.SURFACE_NAME_PATTERN %(self.index+1)
@@ -79,6 +82,7 @@ class Surface():
                    'transparency': self.transparency,
                    'visible': bool(self.is_shown),
                    'volume': self.volume,
+                   'area': self.area,
                   }
         plist_filename = filename + '.plist'
         #plist_filepath = os.path.join(dir_temp, filename + '.plist')
@@ -98,6 +102,10 @@ class Surface():
         self.transparency = sp['transparency']
         self.is_shown = sp['visible']
         self.volume = sp['volume']
+        try:
+            self.area = sp['area']
+        except KeyError:
+            self.area = 0.0
         self.polydata = pu.Import(os.path.join(dirpath, sp['polydata']))
         Surface.general_index = max(Surface.general_index, self.index)
 
@@ -162,7 +170,8 @@ class SurfaceManager():
                                            name = new_name,
                                            colour = original_surface.colour,
                                            transparency = original_surface.transparency,
-                                           volume = original_surface.volume)
+                                           volume = original_surface.volume,
+                                           area = original_surface.area)
 
     def OnRemove(self, pubsub_evt):
         selected_items = pubsub_evt.data
@@ -238,14 +247,15 @@ class SurfaceManager():
 
     def CreateSurfaceFromPolydata(self, polydata, overwrite=False,
                                   name=None, colour=None,
-                                  transparency=None, volume=None):
+                                  transparency=None, volume=None, area=None):
         normals = vtk.vtkPolyDataNormals()
-        normals.SetInput(polydata)
+        normals.SetInputData(polydata)
         normals.SetFeatureAngle(80)
         normals.AutoOrientNormalsOn()
+        normals.Update()
 
         mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInput(normals.GetOutput())
+        mapper.SetInputData(normals.GetOutput())
         mapper.ScalarVisibilityOff()
         mapper.ImmediateModeRenderingOn() # improve performance
 
@@ -287,26 +297,31 @@ class SurfaceManager():
         session.ChangeProject()
 
         # The following lines have to be here, otherwise all volumes disappear
-        if not volume:
+        if not volume or not area:
             triangle_filter = vtk.vtkTriangleFilter()
-            triangle_filter.SetInput(polydata)
+            triangle_filter.SetInputData(polydata)
             triangle_filter.Update()
 
             measured_polydata = vtk.vtkMassProperties()
-            measured_polydata.SetInput(triangle_filter.GetOutput())
+            measured_polydata.SetInputConnection(triangle_filter.GetOutputPort())
+            measured_polydata.Update()
             volume =  measured_polydata.GetVolume()
+            area =  measured_polydata.GetSurfaceArea()
             surface.volume = volume
+            surface.area = area
             print ">>>>", surface.volume
         else:
             surface.volume = volume
+            surface.area = area
+
         self.last_surface_index = surface.index
 
         Publisher.sendMessage('Load surface actor into viewer', actor)
 
         Publisher.sendMessage('Update surface info in GUI',
-                                        (surface.index, surface.name,
-                                        surface.colour, surface.volume,
-                                        surface.transparency))
+                              (surface.index, surface.name,
+                               surface.colour, surface.volume,
+                               surface.area, surface.transparency))
         return surface.index
 
     def OnCloseProject(self, pubsub_evt):
@@ -325,9 +340,9 @@ class SurfaceManager():
         proj = prj.Project()
         surface = proj.surface_dict[index]
         Publisher.sendMessage('Update surface info in GUI',
-                                    (index, surface.name,
-                                    surface.colour, surface.volume,
-                                    surface.transparency))
+                              (index, surface.name,
+                               surface.colour, surface.volume,
+                               surface.area, surface.transparency))
         self.last_surface_index = index
         if surface.is_shown:
             self.ShowActor(index, True)
@@ -336,21 +351,22 @@ class SurfaceManager():
         surface_dict = pubsub_evt.data
         for key in surface_dict:
             surface = surface_dict[key]
+
             # Map polygonal data (vtkPolyData) to graphics primitives.
             normals = vtk.vtkPolyDataNormals()
-            normals.SetInput(surface.polydata)
+            normals.SetInputData(surface.polydata)
             normals.SetFeatureAngle(80)
             normals.AutoOrientNormalsOn()
-            normals.GetOutput().ReleaseDataFlagOn()
+            #  normals.GetOutput().ReleaseDataFlagOn()
 
-	    # Improve performance
+            # Improve performance
             stripper = vtk.vtkStripper()
-            stripper.SetInput(normals.GetOutput())
+            stripper.SetInputConnection(normals.GetOutputPort())
             stripper.PassThroughCellIdsOn()
             stripper.PassThroughPointIdsOn()
 
             mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInput(stripper.GetOutput())
+            mapper.SetInputConnection(stripper.GetOutputPort())
             mapper.ScalarVisibilityOff()
             mapper.ImmediateModeRenderingOn() # improve performance
 
@@ -373,8 +389,8 @@ class SurfaceManager():
             # The following lines have to be here, otherwise all volumes disappear
             Publisher.sendMessage('Update surface info in GUI',
                                         (surface.index, surface.name,
-                                        surface.colour, surface.volume,
-                                        surface.transparency))
+                                         surface.colour, surface.volume,
+                                         surface.area, surface.transparency))
             if not surface.is_shown:
                 self.ShowActor(key, False)
 
@@ -490,30 +506,30 @@ class SurfaceManager():
                 break
 
         polydata_append = vtk.vtkAppendPolyData()
-        polydata_append.ReleaseDataFlagOn()
+        #  polydata_append.ReleaseDataFlagOn()
         t = n_pieces
         while t:
             filename_polydata = q_out.get()
 
             reader = vtk.vtkXMLPolyDataReader()
             reader.SetFileName(filename_polydata)
-            reader.ReleaseDataFlagOn()
+            #  reader.ReleaseDataFlagOn()
             reader.Update()
-            reader.GetOutput().ReleaseDataFlagOn()
+            #  reader.GetOutput().ReleaseDataFlagOn()
 
             polydata = reader.GetOutput()
-            polydata.SetSource(None)
+            #  polydata.SetSource(None)
 
-            polydata_append.AddInput(polydata)
+            polydata_append.AddInputData(polydata)
             del reader
             del polydata
             t -= 1
 
         polydata_append.Update()
-        polydata_append.GetOutput().ReleaseDataFlagOn()
+        #  polydata_append.GetOutput().ReleaseDataFlagOn()
         polydata = polydata_append.GetOutput()
         #polydata.Register(None)
-        polydata.SetSource(None)
+        #  polydata.SetSource(None)
         del polydata_append
 
         if algorithm == 'ca_smoothing':
@@ -521,31 +537,31 @@ class SurfaceManager():
             normals_ref = weakref.ref(normals)
             normals_ref().AddObserver("ProgressEvent", lambda obj,evt:
                                       UpdateProgress(normals_ref(), _("Creating 3D surface...")))
-            normals.SetInput(polydata)
-            normals.ReleaseDataFlagOn()
+            normals.SetInputData(polydata)
+            #  normals.ReleaseDataFlagOn()
             #normals.SetFeatureAngle(80)
             #normals.AutoOrientNormalsOn()
             normals.ComputeCellNormalsOn()
-            normals.GetOutput().ReleaseDataFlagOn()
+            #  normals.GetOutput().ReleaseDataFlagOn()
             normals.Update()
             del polydata
             polydata = normals.GetOutput()
-            polydata.SetSource(None)
+            #  polydata.SetSource(None)
             del normals
 
             clean = vtk.vtkCleanPolyData()
-            clean.ReleaseDataFlagOn()
-            clean.GetOutput().ReleaseDataFlagOn()
+            #  clean.ReleaseDataFlagOn()
+            #  clean.GetOutput().ReleaseDataFlagOn()
             clean_ref = weakref.ref(clean)
             clean_ref().AddObserver("ProgressEvent", lambda obj,evt:
                             UpdateProgress(clean_ref(), _("Creating 3D surface...")))
-            clean.SetInput(polydata)
+            clean.SetInputData(polydata)
             clean.PointMergingOn()
             clean.Update()
 
             del polydata
             polydata = clean.GetOutput()
-            polydata.SetSource(None)
+            #  polydata.SetSource(None)
             del clean
 
             try:
@@ -556,8 +572,8 @@ class SurfaceManager():
                                                  options['max distance'],
                                                  options['min weight'],
                                                  options['steps'])
-            polydata.SetSource(None)
-            polydata.DebugOn()
+            #  polydata.SetSource(None)
+            #  polydata.DebugOn()
 
         else:
             #smoother = vtk.vtkWindowedSincPolyDataFilter()
@@ -565,7 +581,7 @@ class SurfaceManager():
             smoother_ref = weakref.ref(smoother)
             smoother_ref().AddObserver("ProgressEvent", lambda obj,evt:
                             UpdateProgress(smoother_ref(), _("Creating 3D surface...")))
-            smoother.SetInput(polydata)
+            smoother.SetInputData(polydata)
             smoother.SetNumberOfIterations(smooth_iterations)
             smoother.SetRelaxationFactor(smooth_relaxation_factor)
             smoother.SetFeatureAngle(80)
@@ -575,21 +591,21 @@ class SurfaceManager():
             smoother.FeatureEdgeSmoothingOn()
             #smoother.NormalizeCoordinatesOn()
             #smoother.NonManifoldSmoothingOn()
-            smoother.ReleaseDataFlagOn()
-            smoother.GetOutput().ReleaseDataFlagOn()
+            #  smoother.ReleaseDataFlagOn()
+            #  smoother.GetOutput().ReleaseDataFlagOn()
             smoother.Update()
             del polydata
             polydata = smoother.GetOutput()
             #polydata.Register(None)
-            polydata.SetSource(None)
+            #  polydata.SetSource(None)
             del smoother
 
 
         if decimate_reduction:
             print "Decimating", decimate_reduction
             decimation = vtk.vtkQuadricDecimation()
-            decimation.ReleaseDataFlagOn()
-            decimation.SetInput(polydata)
+            #  decimation.ReleaseDataFlagOn()
+            decimation.SetInputData(polydata)
             decimation.SetTargetReduction(decimate_reduction)
             decimation_ref = weakref.ref(decimation)
             decimation_ref().AddObserver("ProgressEvent", lambda obj,evt:
@@ -597,31 +613,31 @@ class SurfaceManager():
             #decimation.PreserveTopologyOn()
             #decimation.SplittingOff()
             #decimation.BoundaryVertexDeletionOff()
-            decimation.GetOutput().ReleaseDataFlagOn()
+            #  decimation.GetOutput().ReleaseDataFlagOn()
             decimation.Update()
             del polydata
             polydata = decimation.GetOutput()
             #polydata.Register(None)
-            polydata.SetSource(None)
+            #  polydata.SetSource(None)
             del decimation
 
         to_measure = polydata
         #to_measure.Register(None)
-        to_measure.SetSource(None)
+        #  to_measure.SetSource(None)
 
         if keep_largest:
             conn = vtk.vtkPolyDataConnectivityFilter()
-            conn.SetInput(polydata)
+            conn.SetInputData(polydata)
             conn.SetExtractionModeToLargestRegion()
             conn_ref = weakref.ref(conn)
             conn_ref().AddObserver("ProgressEvent", lambda obj,evt:
                     UpdateProgress(conn_ref(), _("Creating 3D surface...")))
             conn.Update()
-            conn.GetOutput().ReleaseDataFlagOn()
+            #  conn.GetOutput().ReleaseDataFlagOn()
             del polydata
             polydata = conn.GetOutput()
             #polydata.Register(None)
-            polydata.SetSource(None)
+            #  polydata.SetSource(None)
             del conn
 
         #Filter used to detect and fill holes. Only fill boundary edges holes.
@@ -629,59 +645,59 @@ class SurfaceManager():
         #polydata_utils.FillSurfaceHole, we need to review this.
         if fill_holes:
             filled_polydata = vtk.vtkFillHolesFilter()
-            filled_polydata.ReleaseDataFlagOn()
-            filled_polydata.SetInput(polydata)
+            #  filled_polydata.ReleaseDataFlagOn()
+            filled_polydata.SetInputData(polydata)
             filled_polydata.SetHoleSize(300)
             filled_polydata_ref = weakref.ref(filled_polydata)
             filled_polydata_ref().AddObserver("ProgressEvent", lambda obj,evt:
                     UpdateProgress(filled_polydata_ref(), _("Creating 3D surface...")))
             filled_polydata.Update()
-            filled_polydata.GetOutput().ReleaseDataFlagOn()
+            #  filled_polydata.GetOutput().ReleaseDataFlagOn()
             del polydata
             polydata = filled_polydata.GetOutput()
             #polydata.Register(None)
-            polydata.SetSource(None)
-            polydata.DebugOn()
+            #  polydata.SetSource(None)
+            #  polydata.DebugOn()
             del filled_polydata
 
         normals = vtk.vtkPolyDataNormals()
-        normals.ReleaseDataFlagOn()
+        #  normals.ReleaseDataFlagOn()
         normals_ref = weakref.ref(normals)
         normals_ref().AddObserver("ProgressEvent", lambda obj,evt:
                         UpdateProgress(normals_ref(), _("Creating 3D surface...")))
-        normals.SetInput(polydata)
+        normals.SetInputData(polydata)
         normals.SetFeatureAngle(80)
         normals.AutoOrientNormalsOn()
-        normals.GetOutput().ReleaseDataFlagOn()
+        #  normals.GetOutput().ReleaseDataFlagOn()
         normals.Update()
         del polydata
         polydata = normals.GetOutput()
         #polydata.Register(None)
-        polydata.SetSource(None)
+        #  polydata.SetSource(None)
         del normals
 
         # Improve performance
         stripper = vtk.vtkStripper()
-        stripper.ReleaseDataFlagOn()
+        #  stripper.ReleaseDataFlagOn()
         stripper_ref = weakref.ref(stripper)
         stripper_ref().AddObserver("ProgressEvent", lambda obj,evt:
                         UpdateProgress(stripper_ref(), _("Creating 3D surface...")))
-        stripper.SetInput(polydata)
+        stripper.SetInputData(polydata)
         stripper.PassThroughCellIdsOn()
         stripper.PassThroughPointIdsOn()
-        stripper.GetOutput().ReleaseDataFlagOn()
+        #  stripper.GetOutput().ReleaseDataFlagOn()
         stripper.Update()
         del polydata
         polydata = stripper.GetOutput()
         #polydata.Register(None)
-        polydata.SetSource(None)
+        #  polydata.SetSource(None)
         del stripper
 
         # Map polygonal data (vtkPolyData) to graphics primitives.
         mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInput(polydata)
+        mapper.SetInputData(polydata)
         mapper.ScalarVisibilityOff()
-        mapper.ReleaseDataFlagOn()
+        #  mapper.ReleaseDataFlagOn()
         mapper.ImmediateModeRenderingOn() # improve performance
 
         # Represent an object (geometry & properties) in the rendered scene
@@ -720,10 +736,12 @@ class SurfaceManager():
 
         # The following lines have to be here, otherwise all volumes disappear
         measured_polydata = vtk.vtkMassProperties()
-        measured_polydata.ReleaseDataFlagOn()
-        measured_polydata.SetInput(to_measure)
+        #  measured_polydata.ReleaseDataFlagOn()
+        measured_polydata.SetInputData(to_measure)
         volume =  float(measured_polydata.GetVolume())
+        area =  float(measured_polydata.GetSurfaceArea())
         surface.volume = volume
+        surface.area = area
         self.last_surface_index = surface.index
         del measured_polydata
         del to_measure
@@ -741,6 +759,7 @@ class SurfaceManager():
         Publisher.sendMessage('Update surface info in GUI',
                                     (surface.index, surface.name,
                                     surface.colour, surface.volume,
+                                    surface.area,
                                     surface.transparency))
 
         #When you finalize the progress. The bar is cleaned.
@@ -858,14 +877,15 @@ class SurfaceManager():
             if filetype in (const.FILETYPE_STL, const.FILETYPE_PLY):
                 # Invert normals
                 normals = vtk.vtkPolyDataNormals()
-                normals.SetInput(polydata)
+                normals.SetInputData(polydata)
                 normals.SetFeatureAngle(80)
                 normals.AutoOrientNormalsOn()
-                normals.GetOutput().ReleaseDataFlagOn()
+                #  normals.GetOutput().ReleaseDataFlagOn()
                 normals.UpdateInformation()
+                normals.Update()
                 polydata = normals.GetOutput()
 
             filename = filename.encode(wx.GetDefaultPyEncoding())
             writer.SetFileName(filename)
-            writer.SetInput(polydata)
+            writer.SetInputData(polydata)
             writer.Write()

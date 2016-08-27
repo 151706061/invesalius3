@@ -39,6 +39,12 @@ from gui.widgets.clut_imagedata import CLUTImageDataWidget, EVT_CLUT_NODE_CHANGE
 
 import numpy as np
 
+try:
+    from agw import floatspin as FS
+except ImportError: # if it's not there locally, try the wxPython lib.
+    import wx.lib.agw.floatspin as FS
+
+
 class MaskEvent(wx.PyCommandEvent):
     def __init__(self , evtType, id, mask_index):
         wx.PyCommandEvent.__init__(self, evtType, id,)
@@ -306,6 +312,48 @@ def ShowImportDirDialog():
     os.chdir(current_dir)
     return path
 
+def ShowImportBitmapDirDialog():
+    current_dir = os.path.abspath(".")
+
+    if (sys.platform == 'win32') or (sys.platform == 'linux2'):
+        session = ses.Session()
+
+        if (session.GetLastDicomFolder()):
+            folder = session.GetLastDicomFolder()
+        else:
+            folder = ''
+    else:
+        folder = ''
+
+    dlg = wx.DirDialog(None, _("Choose a folder with TIFF, BMP, JPG or PNG:"), folder,
+                        style=wx.DD_DEFAULT_STYLE
+                        | wx.DD_DIR_MUST_EXIST
+                        | wx.DD_CHANGE_DIR)
+
+    path = None
+    try:
+        if dlg.ShowModal() == wx.ID_OK:
+            # GetPath returns in unicode, if a path has non-ascii characters a
+            # UnicodeEncodeError is raised. To avoid this, path is encoded in utf-8
+            if sys.platform == "win32":
+                path = dlg.GetPath()
+            else:
+                path = dlg.GetPath().encode('utf-8')
+
+    except(wx._core.PyAssertionError): #TODO: error win64
+         if (dlg.GetPath()):
+             path = dlg.GetPath()
+
+    if (sys.platform != 'darwin'):
+        if (path):
+            session.SetLastDicomFolder(path)
+
+    # Only destroy a dialog after you're done with it.
+    dlg.Destroy()
+    os.chdir(current_dir)
+    return path
+
+
 def ShowSaveAsProjectDialog(default_filename=None):
     current_dir = os.path.abspath(".")
     dlg = wx.FileDialog(None,
@@ -462,8 +510,12 @@ def ImportEmptyDirectory(dirpath):
     dlg.ShowModal()
     dlg.Destroy()
 
-def ImportInvalidFiles():
-    msg = _("There are no DICOM files in the selected folder.")
+def ImportInvalidFiles(ftype="DICOM"):
+    if ftype == "Bitmap":
+        msg =  _("There are no Bitmap, JPEG, PNG or TIFF files in the selected folder.")
+    else:
+        msg = _("There are no DICOM files in the selected folder.")
+
     if sys.platform == 'darwin':
         dlg = wx.MessageDialog(None, "", msg,
                                 wx.ICON_INFORMATION | wx.OK)
@@ -1565,4 +1617,417 @@ class MaskBooleanDialog(wx.Dialog):
         Publisher.sendMessage('Refresh viewer')
 
         self.Close()
+        self.Destroy()
+
+
+class ReorientImageDialog(wx.Dialog):
+    def __init__(self):
+        pre = wx.PreDialog()
+        pre.Create(wx.GetApp().GetTopWindow(), -1, _(u'Image reorientation'), style=wx.DEFAULT_DIALOG_STYLE|wx.FRAME_FLOAT_ON_PARENT)
+        self.PostCreate(pre)
+
+        self._init_gui()
+        self._bind_events()
+        self._bind_events_wx()
+
+    def _init_gui(self):
+        self.anglex = wx.TextCtrl(self, -1, "0.0", style=wx.TE_READONLY)
+        self.angley = wx.TextCtrl(self, -1, "0.0", style=wx.TE_READONLY)
+        self.anglez = wx.TextCtrl(self, -1, "0.0", style=wx.TE_READONLY)
+
+        self.btnapply = wx.Button(self, -1, _("Apply"))
+
+        sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        sizer.Add(wx.StaticText(self, -1, _("Angle X")), 0, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        sizer.Add(self.anglex, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.AddSpacer(5)
+
+        sizer.Add(wx.StaticText(self, -1, _("Angle Y")), 0, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        sizer.Add(self.angley, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.AddSpacer(5)
+
+        sizer.Add(wx.StaticText(self, -1, _("Angle Z")), 0, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        sizer.Add(self.anglez, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.AddSpacer(5)
+
+        sizer.Add(self.btnapply, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.AddSpacer(5)
+
+        self.SetSizer(sizer)
+        self.Fit()
+
+    def _bind_events(self):
+        Publisher.subscribe(self._update_angles, 'Update reorient angles')
+        Publisher.subscribe(self._close_dialog, 'Close reorient dialog')
+
+    def _bind_events_wx(self):
+        self.btnapply.Bind(wx.EVT_BUTTON, self.apply_reorientation)
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+
+    def _update_angles(self, pubsub_evt):
+        anglex, angley, anglez = pubsub_evt.data
+        self.anglex.SetValue("%.2f" % np.rad2deg(anglex))
+        self.angley.SetValue("%.2f" % np.rad2deg(angley))
+        self.anglez.SetValue("%.2f" % np.rad2deg(anglez))
+
+    def _close_dialog(self, pubsub_evt):
+        self.Destroy()
+
+    def apply_reorientation(self, evt):
+        Publisher.sendMessage('Apply reorientation')
+        self.Close()
+
+    def OnClose(self, evt):
+        Publisher.sendMessage('Disable style', const.SLICE_STATE_REORIENT)
+        Publisher.sendMessage('Enable style', const.STATE_DEFAULT)
+        self.Destroy()
+
+
+
+class ImportBitmapParameters(wx.Dialog):
+    from os import sys
+
+    def __init__(self):
+        pre = wx.PreDialog()
+
+        if sys.platform == 'win32':
+            size=wx.Size(380,180)
+        else:
+            size=wx.Size(380,210)
+
+        pre.Create(wx.GetApp().GetTopWindow(), -1, _(u"Create project from bitmap"),size=wx.Size(380,220),\
+                                style=wx.DEFAULT_DIALOG_STYLE|wx.FRAME_FLOAT_ON_PARENT|wx.STAY_ON_TOP)
+
+        self.interval = 0
+        
+        self.PostCreate(pre)
+
+        self._init_gui()
+
+        self.bind_evts()
+        self.CenterOnScreen()
+
+
+    def _init_gui(self):
+        
+        import project as prj
+        
+        p = wx.Panel(self, -1, style = wx.TAB_TRAVERSAL
+                     | wx.CLIP_CHILDREN
+                     | wx.FULL_REPAINT_ON_RESIZE)
+       
+        gbs_principal = self.gbs = wx.GridBagSizer(4,1)
+
+        gbs = self.gbs = wx.GridBagSizer(5, 2)
+       
+        flag_labels = wx.ALIGN_RIGHT  | wx.ALIGN_CENTER_VERTICAL
+
+        stx_name = wx.StaticText(p, -1, _(u"Project name:"))
+        tx_name = self.tx_name = wx.TextCtrl(p, -1, "InVesalius Bitmap", size=wx.Size(220,-1))
+
+        stx_orientation = wx.StaticText(p, -1, _(u"Slices orientation:"),)
+        cb_orientation_options = [_(u'Axial'), _(u'Coronal'), _(u'Sagital')]
+        cb_orientation = self.cb_orientation = wx.ComboBox(p, value="Axial", choices=cb_orientation_options,\
+                                                size=wx.Size(160,-1), style=wx.CB_DROPDOWN|wx.CB_READONLY)
+
+        stx_spacing = wx.StaticText(p, -1, _(u"Spacing (mm):"))
+
+        gbs.Add(stx_name, (0,0), flag=flag_labels)
+        gbs.Add(tx_name, (0,1))
+        gbs.AddStretchSpacer((1,0))
+
+        gbs.Add(stx_orientation, (2,0), flag=flag_labels)
+        gbs.Add(cb_orientation, (2,1))
+
+        gbs.Add(stx_spacing, (3,0))
+        gbs.AddStretchSpacer((4,0))
+
+        #--- spacing --------------
+        gbs_spacing = wx.GridBagSizer(2, 6)
+        
+        stx_spacing_x = stx_spacing_x = wx.StaticText(p, -1, _(u"X:"))
+        fsp_spacing_x = self.fsp_spacing_x = FS.FloatSpin(p, -1, min_val=0,\
+                                            increment=0.25, value=1.0, digits=8)
+
+
+        stx_spacing_y = stx_spacing_y = wx.StaticText(p, -1, _(u"Y:"))
+        fsp_spacing_y = self.fsp_spacing_y = FS.FloatSpin(p, -1, min_val=0,\
+                                            increment=0.25, value=1.0, digits=8)
+
+        stx_spacing_z = stx_spacing_z = wx.StaticText(p, -1, _(u"Z:"))
+        fsp_spacing_z = self.fsp_spacing_z = FS.FloatSpin(p, -1, min_val=0,\
+                                            increment=0.25, value=1.0, digits=8)
+
+
+        try:
+            proj = prj.Project()
+            
+            sx = proj.spacing[0]
+            sy = proj.spacing[1]
+            sz = proj.spacing[2]
+
+            fsp_spacing_x.SetValue(sx)
+            fsp_spacing_y.SetValue(sy)
+            fsp_spacing_z.SetValue(sz)
+
+        except(AttributeError):
+            pass
+
+        gbs_spacing.Add(stx_spacing_x, (0,0), flag=flag_labels)
+        gbs_spacing.Add(fsp_spacing_x, (0,1))
+
+        gbs_spacing.Add(stx_spacing_y, (0,2), flag=flag_labels)
+        gbs_spacing.Add(fsp_spacing_y, (0,3))
+
+        gbs_spacing.Add(stx_spacing_z, (0,4), flag=flag_labels)
+        gbs_spacing.Add(fsp_spacing_z, (0,5))
+
+        #----- buttons ------------------------
+        gbs_button = wx.GridBagSizer(2, 4)
+ 
+        btn_ok = self.btn_ok= wx.Button(p, wx.ID_OK)
+        btn_ok.SetDefault()
+
+        btn_cancel = wx.Button(p, wx.ID_CANCEL)
+
+        gbs_button.AddStretchSpacer((0,2))
+        gbs_button.Add(btn_cancel, (1,2))
+        gbs_button.Add(btn_ok, (1,3))
+
+        gbs_principal.AddSizer(gbs, (0,0), flag = wx.ALL|wx.EXPAND)
+        gbs_principal.AddSizer(gbs_spacing, (1,0),  flag=wx.ALL|wx.EXPAND)
+        gbs_principal.AddStretchSpacer((2,0))
+        gbs_principal.AddSizer(gbs_button, (3,0), flag = wx.ALIGN_RIGHT)
+
+        box = wx.BoxSizer()
+        box.AddSizer(gbs_principal, 1, wx.ALL|wx.EXPAND, 10)
+        
+        p.SetSizer(box)
+
+
+    def bind_evts(self):
+        self.btn_ok.Bind(wx.EVT_BUTTON, self.OnOk)
+   
+    def SetInterval(self, v):
+        self.interval = v
+
+    def OnOk(self, evt):
+        self.Close()
+        self.Destroy()
+
+        orient_selection = self.cb_orientation.GetSelection()
+
+        if(orient_selection == 1):
+            orientation = u"CORONAL"
+        elif(orient_selection == 2):
+            orientation = u"SAGITTAL"
+        else:
+            orientation = u"AXIAL"
+
+        values = [self.tx_name.GetValue(), orientation,\
+                  self.fsp_spacing_x.GetValue(), self.fsp_spacing_y.GetValue(),\
+                  self.fsp_spacing_z.GetValue(), self.interval]
+        Publisher.sendMessage('Open bitmap files', values)
+
+
+def BitmapNotSameSize():
+    
+    dlg = wx.MessageDialog(None,_("All bitmaps files must be the same \n width and height size."), 'Error',\
+                                wx.OK | wx.ICON_ERROR)
+ 
+    dlg.ShowModal()
+    dlg.Destroy()
+
+
+class FFillOptionsDialog(wx.Dialog):
+    def __init__(self, title, config):
+        pre = wx.PreDialog()
+        pre.Create(wx.GetApp().GetTopWindow(), -1, title, style=wx.DEFAULT_DIALOG_STYLE|wx.FRAME_FLOAT_ON_PARENT)
+        self.PostCreate(pre)
+
+        self.config = config
+
+        self._init_gui()
+
+    def _init_gui(self):
+        """
+        Create the widgets.
+        """
+        # Target
+        self.target_2d = wx.RadioButton(self, -1, _(u"2D - Actual slice"), style=wx.RB_GROUP)
+        self.target_3d = wx.RadioButton(self, -1, _(u"3D - All slices"))
+
+        if self.config.target == "2D":
+            self.target_2d.SetValue(1)
+        else:
+            self.target_3d.SetValue(1)
+
+        # Connectivity 2D
+        self.conect2D_4 = wx.RadioButton(self, -1, "4", style=wx.RB_GROUP)
+        self.conect2D_8 = wx.RadioButton(self, -1, "8")
+
+        if self.config.con_2d == 8:
+            self.conect2D_8.SetValue(1)
+        else:
+            self.conect2D_4.SetValue(1)
+            self.config.con_2d = 4
+
+        # Connectivity 3D
+        self.conect3D_6 = wx.RadioButton(self, -1, "6", style=wx.RB_GROUP)
+        self.conect3D_18 = wx.RadioButton(self, -1, "18")
+        self.conect3D_26 = wx.RadioButton(self, -1, "26")
+
+        if self.config.con_3d == 18:
+            self.conect3D_18.SetValue(1)
+        elif self.config.con_3d == 26:
+            self.conect3D_26.SetValue(1)
+        else:
+            self.conect3D_6.SetValue(1)
+
+        # Sizer
+        sizer = wx.GridBagSizer(11, 6)
+        sizer.AddStretchSpacer((0, 0))
+
+        sizer.Add(wx.StaticText(self, -1, _(u"Parameters")), (1, 0), (1, 6), flag=wx.LEFT, border=7)
+        sizer.Add(self.target_2d, (2, 0), (1, 6), flag=wx.LEFT, border=9)
+        sizer.Add(self.target_3d, (3, 0), (1, 6), flag=wx.LEFT, border=9)
+
+        sizer.AddStretchSpacer((4, 0))
+
+        sizer.Add(wx.StaticText(self, -1, _(u"2D Connectivity")), (5, 0), (1, 6), flag=wx.LEFT, border=9)
+        sizer.Add(self.conect2D_4, (6, 0), flag=wx.LEFT, border=9)
+        sizer.Add(self.conect2D_8, (6, 1), flag=wx.LEFT, border=9)
+
+        sizer.AddStretchSpacer((7, 0))
+
+        sizer.Add(wx.StaticText(self, -1, _(u"3D Connectivity")), (8, 0), (1, 6), flag=wx.LEFT, border=9)
+        sizer.Add(self.conect3D_6, (9, 0), flag=wx.LEFT, border=9)
+        sizer.Add(self.conect3D_18, (9, 1), flag=wx.LEFT, border=9)
+        sizer.Add(self.conect3D_26, (9, 2), flag=wx.LEFT, border=9)
+        sizer.AddStretchSpacer((10, 0))
+
+        self.SetSizer(sizer)
+        sizer.Fit(self)
+        self.Layout()
+
+        self.Bind(wx.EVT_RADIOBUTTON, self.OnSetRadio)
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+
+    def OnSetRadio(self, evt):
+        # Target
+        if self.target_2d.GetValue():
+            self.config.target = "2D"
+        else:
+            self.config.target = "3D"
+
+        # 2D
+        if self.conect2D_4.GetValue():
+            self.config.con_2d = 4
+        elif self.conect2D_8.GetValue():
+            self.config.con_2d = 8
+
+        # 3D
+        if self.conect3D_6.GetValue():
+            self.config.con_3d = 6
+        elif self.conect3D_18.GetValue():
+            self.config.con_3d = 18
+        elif self.conect3D_26.GetValue():
+            self.config.con_3d = 26
+
+    def OnClose(self, evt):
+        if self.config.dlg_visible:
+            Publisher.sendMessage('Disable style', const.SLICE_STATE_MASK_FFILL)
+        evt.Skip()
+        self.Destroy()
+
+
+class SelectPartsOptionsDialog(wx.Dialog):
+    def __init__(self, config):
+        pre = wx.PreDialog()
+        pre.Create(wx.GetApp().GetTopWindow(), -1, _(u"Select mask parts"), style=wx.DEFAULT_DIALOG_STYLE|wx.FRAME_FLOAT_ON_PARENT)
+        self.PostCreate(pre)
+
+        self.config = config
+
+        self._init_gui()
+
+    def _init_gui(self):
+        self.target_name = wx.TextCtrl(self, -1)
+        self.target_name.SetValue(self.config.mask_name)
+
+        # Connectivity 3D
+        self.conect3D_6 = wx.RadioButton(self, -1, "6", style=wx.RB_GROUP)
+        self.conect3D_18 = wx.RadioButton(self, -1, "18")
+        self.conect3D_26 = wx.RadioButton(self, -1, "26")
+
+        if self.config.con_3d == 18:
+            self.conect3D_18.SetValue(1)
+        elif self.config.con_3d == 26:
+            self.conect3D_26.SetValue(1)
+        else:
+            self.conect3D_6.SetValue(1)
+
+        sizer_t = wx.BoxSizer(wx.HORIZONTAL)
+        sizer_t.AddSpacer(7)
+        sizer_t.Add(wx.StaticText(self, -1, _(u"Target mask name")), 1, wx.ALIGN_CENTRE_VERTICAL)
+        sizer_t.AddSpacer(7)
+        sizer_t.Add(self.target_name, 1, wx.EXPAND)
+        sizer_t.AddSpacer(7)
+
+        sizer_c = wx.BoxSizer(wx.HORIZONTAL)
+        sizer_c.AddSpacer(7)
+        sizer_c.Add(self.conect3D_6)
+        sizer_c.AddSpacer(7)
+        sizer_c.Add(self.conect3D_18)
+        sizer_c.AddSpacer(7)
+        sizer_c.Add(self.conect3D_26)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.AddSpacer(7)
+        sizer.Add(sizer_t, 1, wx.EXPAND)
+        sizer.AddSpacer(7)
+        sizer.Add(wx.StaticText(self, -1, _(u"3D Connectivity")), 0, wx.LEFT, 7)
+        sizer.AddSpacer(5)
+        sizer.Add(sizer_c)
+        sizer.AddSpacer(7)
+
+        #  sizer = wx.GridBagSizer(11, 6)
+        #  sizer.AddStretchSpacer((0, 0))
+
+        #  sizer.Add(wx.StaticText(self, -1, _(u"Target mask name")), (1, 0), (1, 6), flag=wx.LEFT|wx.ALIGN_BOTTOM|wx.EXPAND, border=7)
+        #  sizer.Add(self.target_name, (2, 0), (1, 6), flag=wx.LEFT|wx.EXPAND|wx.RIGHT|wx.ALIGN_TOP, border=9)
+
+        #  #  sizer.AddStretchSpacer((3, 0))
+
+        #  sizer.Add(wx.StaticText(self, -1, _(u"3D Connectivity")), (3, 0), (1, 6), flag=wx.LEFT, border=7)
+        #  sizer.Add(self.conect3D_6, (4, 0), flag=wx.LEFT, border=9)
+        #  sizer.Add(self.conect3D_18, (4, 1), flag=wx.LEFT, border=9)
+        #  sizer.Add(self.conect3D_26, (4, 2), flag=wx.LEFT, border=9)
+        #  sizer.AddStretchSpacer((5, 0))
+
+        self.SetSizer(sizer)
+        sizer.Fit(self)
+        self.Layout()
+
+        self.target_name.Bind(wx.EVT_CHAR, self.OnChar)
+        self.Bind(wx.EVT_RADIOBUTTON, self.OnSetRadio)
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+
+    def OnChar(self, evt):
+        evt.Skip()
+        self.config.mask_name = self.target_name.GetValue()
+
+    def OnSetRadio(self, evt):
+        if self.conect3D_6.GetValue():
+            self.config.con_3d = 6
+        elif self.conect3D_18.GetValue():
+            self.config.con_3d = 18
+        elif self.conect3D_26.GetValue():
+            self.config.con_3d = 26
+
+    def OnClose(self, evt):
+        if self.config.dlg_visible:
+            Publisher.sendMessage('Disable style', const.SLICE_STATE_SELECT_MASK_PARTS)
+        evt.Skip()
         self.Destroy()

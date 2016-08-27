@@ -524,6 +524,7 @@ class MaskProperties(wx.Panel):
         self.bind_evt_gradient = False
         self.gradient.SetMinValue(thresh_min)
         self.gradient.SetMaxValue(thresh_max)
+        print ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", thresh_min, thresh_max
         self.bind_evt_gradient = True
         thresh = (thresh_min, thresh_max)
         if thresh in Project().threshold_modes.values():
@@ -561,10 +562,10 @@ class MaskProperties(wx.Panel):
         mask_thresh = evt_pubsub.data[2]
         mask_colour = [int(c*255) for c in evt_pubsub.data[3]]
         index = self.combo_mask_name.Append(mask_name)
-        self.combo_mask_name.SetSelection(index)
-        self.button_colour.SetColour(mask_colour)
-        self.gradient.SetColour(mask_colour)
-        self.combo_mask_name.SetSelection(index)
+        #  self.combo_mask_name.SetSelection(index)
+        #  self.button_colour.SetColour(mask_colour)
+        #  self.gradient.SetColour(mask_colour)
+        #  self.combo_mask_name.SetSelection(index)
 
     def GetMaskSelected(self):
         x = self.combo_mask_name.GetSelection()

@@ -38,6 +38,7 @@ class SliceData(object):
         self.number = 0
         self.orientation = 'AXIAL'
         self.renderer = None
+        self.canvas_renderer = None
         self.overlay_renderer = None
         self.__create_text()
         self.__create_box()
@@ -55,7 +56,7 @@ class SliceData(object):
 
     def __create_line_actor(self, line):
         line_mapper = vtk.vtkPolyDataMapper2D()
-        line_mapper.SetInput(line.GetOutput())
+        line_mapper.SetInputConnection(line.GetOutputPort())
 
         line_actor = vtk.vtkActor2D()
         line_actor.SetMapper(line_mapper)
